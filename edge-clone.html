@@ -470,6 +470,7 @@
     </div>
     
     <div style="display:flex; gap:8px;">
+      <button id="btn-ai-generate" class="editor-btn success" title="Generate an AI 3D Labyrinth">AI Gen</button>
       <button id="btn-toggle-slice" class="editor-btn success" title="Toggle layer slicing (hides blocks above current height)">Slice: ON</button>
       <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
       <button id="btn-save-local" class="editor-btn">Save</button>
@@ -2210,6 +2211,154 @@ function respawnPlayer() {
   cameraLookAt.copy(playerCube.position);
 }
 
+function generateAILabyrinth() {
+  const width = 15;
+  const depth = 15;
+  const maxHeight = 4;
+  
+  const lvl = new Level3D();
+  lvl.name = "AI Labyrinth";
+  lvl.world = Math.floor(Math.random() * 5);
+  
+  const maze = [];
+  for (let x = 0; x < width; x++) {
+    maze[x] = [];
+    for (let z = 0; z < depth; z++) {
+      maze[x][z] = { visited: false, height: 0, active: false };
+    }
+  }
+  
+  const stack = [];
+  const startX = 1, startZ = 1;
+  maze[startX][startZ].visited = true;
+  maze[startX][startZ].height = 0;
+  maze[startX][startZ].active = true;
+  stack.push({ x: startX, z: startZ });
+  
+  const cells = [{ x: startX, z: startZ, y: 0 }];
+  
+  while (stack.length > 0) {
+    const current = stack[stack.length - 1];
+    const neighbors = [];
+    
+    const dirs = [
+      { dx: 2, dz: 0 },
+      { dx: -2, dz: 0 },
+      { dx: 0, dz: 2 },
+      { dx: 0, dz: -2 }
+    ];
+    
+    dirs.forEach(d => {
+      const nx = current.x + d.dx;
+      const nz = current.z + d.dz;
+      if (nx > 0 && nx < width - 1 && nz > 0 && nz < depth - 1) {
+        if (!maze[nx][nz].visited) {
+          neighbors.push({ x: nx, z: nz });
+        }
+      }
+    });
+    
+    if (neighbors.length > 0) {
+      const next = neighbors[Math.floor(Math.random() * neighbors.length)];
+      const currY = maze[current.x][current.z].height;
+      let nextY = currY;
+      const r = Math.random();
+      if (r < 0.25 && currY < maxHeight) {
+        nextY = currY + 1;
+      } else if (r < 0.5 && currY > 0) {
+        nextY = currY - 1;
+      }
+      
+      maze[next.x][next.z].visited = true;
+      maze[next.x][next.z].height = nextY;
+      maze[next.x][next.z].active = true;
+      
+      const cx = (current.x + next.x) / 2;
+      const cz = (current.z + next.z) / 2;
+      maze[cx][cz].visited = true;
+      maze[cx][cz].height = currY;
+      maze[cx][cz].active = true;
+      
+      cells.push({ x: next.x, z: next.z, y: nextY });
+      cells.push({ x: cx, z: cz, y: currY });
+      
+      stack.push(next);
+    } else {
+      stack.pop();
+    }
+  }
+  
+  let exitCell = cells[0];
+  let maxDist = 0;
+  cells.forEach(c => {
+    const dist = Math.abs(c.x - startX) + Math.abs(c.z - startZ) + c.y * 2;
+    if (dist > maxDist) {
+      maxDist = dist;
+      exitCell = c;
+    }
+  });
+  
+  lvl.start = { x: startX, y: 0, z: startZ };
+  lvl.exit = { x: exitCell.x, y: exitCell.y, z: exitCell.z };
+  lvl.par = Math.round(cells.length * 0.7);
+  
+  for (let x = 0; x < width; x++) {
+    for (let z = 0; z < depth; z++) {
+      const cell = maze[x][z];
+      if (cell.active) {
+        const key = `${x},${cell.height},${z}`;
+        const isStart = (x === startX && cell.height === 0 && z === startZ);
+        const isExit = (x === exitCell.x && cell.height === exitCell.y && z === exitCell.z);
+        
+        let type = 'normal';
+        if (!isStart && !isExit && Math.random() < 0.18) {
+          type = 'shaker';
+        }
+        
+        lvl.blocks.set(key, { x, y: cell.height, z, type, properties: {} });
+      }
+    }
+  }
+  
+  const deadEnds = [];
+  for (let x = 1; x < width - 1; x += 2) {
+    for (let z = 1; z < depth - 1; z += 2) {
+      if (maze[x][z].active) {
+        let conns = 0;
+        const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
+        dirs.forEach(d => {
+          if (maze[x + d.dx][z + d.dz].active) conns++;
+        });
+        if (conns === 1) {
+          const isStart = (x === startX && z === startZ);
+          const isExit = (x === exitCell.x && z === exitCell.z);
+          if (!isStart && !isExit) {
+            deadEnds.push({ x, y: maze[x][z].height, z });
+          }
+        }
+      }
+    }
+  }
+  
+  let prismsToPlace = Math.min(deadEnds.length, 5);
+  if (prismsToPlace < 2) {
+    prismsToPlace = 3;
+    const shuffled = [...cells].filter(c => !(c.x === startX && c.z === startZ) && !(c.x === exitCell.x && c.z === exitCell.z)).sort(() => 0.5 - Math.random());
+    for (let i = 0; i < prismsToPlace; i++) {
+      if (shuffled[i]) {
+        lvl.prisms.set(`${shuffled[i].x},${shuffled[i].y},${shuffled[i].z}`, { type: 'prism' });
+      }
+    }
+  } else {
+    const shuffled = deadEnds.sort(() => 0.5 - Math.random());
+    for (let i = 0; i < prismsToPlace; i++) {
+      lvl.prisms.set(`${shuffled[i].x},${shuffled[i].y},${shuffled[i].z}`, { type: 'prism' });
+    }
+  }
+  
+  return lvl;
+}
+
 /* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR IMPLEMENTATION
    ═══════════════════════════════════════════════════════════ */
@@ -2962,6 +3111,19 @@ document.getElementById('btn-toggle-slice').addEventListener('click', () => {
 
 document.getElementById('btn-playtest').addEventListener('click', enterPlaytestMode);
 document.getElementById('btn-editor-exit').addEventListener('click', exitEditMode);
+
+document.getElementById('btn-ai-generate').addEventListener('click', () => {
+  audio.init();
+  if (confirm("Generate a complex 3D AI Labyrinth? This will overwrite your current design.")) {
+    const lvl = generateAILabyrinth();
+    activeLevel = lvl;
+    document.getElementById('level-name-input').value = lvl.name;
+    document.getElementById('world-select').value = lvl.world;
+    buildLevel3D(lvl);
+    drawEditorWires();
+    showMessage('AI LABYRINTH GENERATED');
+  }
+});
 
 document.getElementById('btn-clear-grid').addEventListener('click', () => {
   if (confirm("Clear all blocks in this level?")) {
