@@ -58,6 +58,7 @@ An integrated, glassmorphic **3D Level Editor** allows you to build, playtest, s
 - **Move (Roll)**: `WASD` / `Arrow Keys`
 - **Respawn / Reset**: `R`
 - **Next Level (when cleared)**: `Space`
+- **Load Custom Level**: Click the **Load Level** button in the HUD next to the **EDITOR** button to select and play any of your custom levels directly during gameplay.
 
 ### Level Editor Controls:
 - **Place Block / Item**: `Left Click`

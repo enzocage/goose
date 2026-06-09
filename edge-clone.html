@@ -342,6 +342,7 @@
       <span id="level-number">1</span>
     </div>
     <div style="display:flex; gap:12px; pointer-events:auto; align-items:center;">
+      <button id="btn-play-load" class="hud-btn">Load Level</button>
       <button id="btn-editor-toggle" class="hud-btn">EDITOR</button>
       <div id="score-box">
         <div id="prism-display">
@@ -519,27 +520,28 @@
     <div class="instruction-row"><span>Linker Tool</span><span>Click switch then target</span></div>
   </div>
 
-  <!-- Right Panel: Load Library list -->
-  <div id="editor-library-panel" style="display:none;">
-    <div class="panel-header">LOAD LEVEL</div>
-    <div id="custom-levels-list" class="levels-list"></div>
-    <button id="btn-close-library" class="editor-btn" style="width:100%; margin-top:12px;">Close</button>
-  </div>
-  
-  <!-- Export/Import Modal -->
-  <div id="export-import-modal" class="modal-overlay" style="display:none;">
-    <div class="modal-content">
-      <div class="modal-header" id="modal-title">EXPORT LEVEL</div>
-      <textarea id="modal-textarea" class="editor-textarea"></textarea>
-      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
-        <button id="btn-modal-copy" class="editor-btn success">Copy</button>
-        <button id="btn-modal-download" class="editor-btn success" style="display:none;">Save File</button>
-        <button id="btn-modal-upload" class="editor-btn success" style="display:none;">Load File</button>
-        <button id="btn-modal-load" class="editor-btn success" style="display:none;">Load</button>
-        <button id="btn-modal-close" class="editor-btn">Close</button>
-      </div>
-      <input type="file" id="import-file-input" accept=".json" style="display:none;">
+</div>
+
+<!-- Right Panel: Load Library list (Shared) -->
+<div id="editor-library-panel" style="display:none; z-index: 250;">
+  <div class="panel-header">LOAD LEVEL</div>
+  <div id="custom-levels-list" class="levels-list"></div>
+  <button id="btn-close-library" class="editor-btn" style="width:100%; margin-top:12px;">Close</button>
+</div>
+
+<!-- Export/Import Modal (Shared) -->
+<div id="export-import-modal" class="modal-overlay" style="display:none; z-index: 260;">
+  <div class="modal-content">
+    <div class="modal-header" id="modal-title">EXPORT LEVEL</div>
+    <textarea id="modal-textarea" class="editor-textarea"></textarea>
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+      <button id="btn-modal-copy" class="editor-btn success">Copy</button>
+      <button id="btn-modal-download" class="editor-btn success" style="display:none;">Save File</button>
+      <button id="btn-modal-upload" class="editor-btn success" style="display:none;">Load File</button>
+      <button id="btn-modal-load" class="editor-btn success" style="display:none;">Load</button>
+      <button id="btn-modal-close" class="editor-btn">Close</button>
     </div>
+    <input type="file" id="import-file-input" accept=".json" style="display:none;">
   </div>
 </div>
 
@@ -1009,6 +1011,7 @@ let isTeleporting = false;
 let isFalling = false;
 let isLevelComplete = false;
 let isMini = false;
+let isCustomLevel = false;
 
 let balanceDir = null;
 let balanceTimer = 0;
@@ -1322,7 +1325,7 @@ function buildLevel3D(level3D) {
 
   document.getElementById('world-name').textContent = world.name.toUpperCase();
   document.getElementById('level-name').textContent = level3D.name;
-  document.getElementById('level-number').textContent = isEditMode ? 'E' : (currentLevelIdx + 1);
+  document.getElementById('level-number').textContent = isEditMode ? 'E' : (isCustomLevel ? 'C' : currentLevelIdx + 1);
   updatePrismUI(); updateMoveUI(); updateTimerUI();
   document.getElementById('mini-hud-bar').style.display = 'none';
 
@@ -2545,6 +2548,7 @@ function updateLibraryList() {
     div.className = 'library-item';
     div.innerHTML = `<span>${name}</span><button class="delete-btn">×</button>`;
     div.querySelector('span').addEventListener('click', () => {
+      isCustomLevel = true;
       activeLevel = deserializeLevel(store[name]);
       document.getElementById('level-name-input').value = activeLevel.name;
       document.getElementById('world-select').value = activeLevel.world;
@@ -2875,6 +2879,7 @@ function adjustEditHeight(val) {
    PRE-MADE LEVEL LOADER
    ═══════════════════════════════════════════════════════════ */
 function loadPreMadeLevel(idx) {
+  isCustomLevel = false;
   const flatLvl = LEVELS[idx];
   const lvl3D = convertTo3D(flatLvl);
   buildLevel3D(lvl3D);
@@ -3092,6 +3097,12 @@ window.addEventListener('wheel', (e) => {
 /* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR BUTTON EVENTS
    ═══════════════════════════════════════════════════════════ */
+document.getElementById('btn-play-load').addEventListener('click', () => {
+  audio.init();
+  updateLibraryList();
+  document.getElementById('editor-library-panel').style.display = 'block';
+});
+
 document.getElementById('btn-editor-toggle').addEventListener('click', () => {
   audio.init();
   if (isEditMode) exitEditMode(); else enterEditMode();
