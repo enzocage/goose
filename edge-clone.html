@@ -526,7 +526,10 @@
 <div id="editor-library-panel" style="display:none; z-index: 250;">
   <div class="panel-header">LOAD LEVEL</div>
   <div id="custom-levels-list" class="levels-list"></div>
-  <button id="btn-close-library" class="editor-btn" style="width:100%; margin-top:12px;">Close</button>
+  <div style="display:flex; gap:8px; margin-top:12px;">
+    <button id="btn-library-upload" class="editor-btn success" style="flex-grow:1;">Load File</button>
+    <button id="btn-close-library" class="editor-btn" style="flex-grow:1;">Close</button>
+  </div>
 </div>
 
 <!-- Export/Import Modal (Shared) -->
@@ -3176,6 +3179,9 @@ document.getElementById('btn-load-local').addEventListener('click', () => {
   updateLibraryList();
   document.getElementById('editor-library-panel').style.display = 'block';
 });
+document.getElementById('btn-library-upload').addEventListener('click', () => {
+  document.getElementById('import-file-input').click();
+});
 document.getElementById('btn-close-library').addEventListener('click', () => {
   document.getElementById('editor-library-panel').style.display = 'none';
 });
@@ -3235,6 +3241,7 @@ document.getElementById('import-file-input').addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
+      isCustomLevel = true;
       const lvl = deserializeLevel(evt.target.result);
       activeLevel = lvl;
       document.getElementById('level-name-input').value = lvl.name;
@@ -3242,6 +3249,7 @@ document.getElementById('import-file-input').addEventListener('change', (e) => {
       buildLevel3D(lvl);
       drawEditorWires();
       document.getElementById('export-import-modal').style.display = 'none';
+      document.getElementById('editor-library-panel').style.display = 'none';
       showMessage('LEVEL IMPORTED SUCCESSFULLY');
     } catch(err) {
       alert("Invalid level JSON file.");
