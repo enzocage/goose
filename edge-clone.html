@@ -2212,30 +2212,31 @@ function respawnPlayer() {
 }
 
 function generateAILabyrinth() {
-  const width = 15;
-  const depth = 15;
-  const maxHeight = 4;
+  const width = 41;
+  const depth = 41;
+  const targetBlocksCount = 800;
   
   const lvl = new Level3D();
-  lvl.name = "AI Labyrinth";
+  lvl.name = "Goose Labyrinth";
   lvl.world = Math.floor(Math.random() * 5);
   
   const maze = [];
   for (let x = 0; x < width; x++) {
     maze[x] = [];
     for (let z = 0; z < depth; z++) {
-      maze[x][z] = { visited: false, height: 0, active: false };
+      maze[x][z] = { visited: false, active: false };
     }
   }
   
   const stack = [];
   const startX = 1, startZ = 1;
   maze[startX][startZ].visited = true;
-  maze[startX][startZ].height = 0;
   maze[startX][startZ].active = true;
   stack.push({ x: startX, z: startZ });
   
-  const cells = [{ x: startX, z: startZ, y: 0 }];
+  const cells = [{ x: startX, z: startZ }];
+  const allPathBlocks = new Set();
+  allPathBlocks.add(`${startX},${startZ}`);
   
   while (stack.length > 0) {
     const current = stack[stack.length - 1];
@@ -2260,27 +2261,18 @@ function generateAILabyrinth() {
     
     if (neighbors.length > 0) {
       const next = neighbors[Math.floor(Math.random() * neighbors.length)];
-      const currY = maze[current.x][current.z].height;
-      let nextY = currY;
-      const r = Math.random();
-      if (r < 0.25 && currY < maxHeight) {
-        nextY = currY + 1;
-      } else if (r < 0.5 && currY > 0) {
-        nextY = currY - 1;
-      }
       
       maze[next.x][next.z].visited = true;
-      maze[next.x][next.z].height = nextY;
       maze[next.x][next.z].active = true;
+      cells.push({ x: next.x, z: next.z });
+      allPathBlocks.add(`${next.x},${next.z}`);
       
       const cx = (current.x + next.x) / 2;
       const cz = (current.z + next.z) / 2;
       maze[cx][cz].visited = true;
-      maze[cx][cz].height = currY;
       maze[cx][cz].active = true;
-      
-      cells.push({ x: next.x, z: next.z, y: nextY });
-      cells.push({ x: cx, z: cz, y: currY });
+      cells.push({ x: cx, z: cz });
+      allPathBlocks.add(`${cx},${cz}`);
       
       stack.push(next);
     } else {
@@ -2288,10 +2280,32 @@ function generateAILabyrinth() {
     }
   }
   
+  // Ensure exactly 800 blocks
+  let currentBlocks = Array.from(allPathBlocks).map(s => {
+    const [x, z] = s.split(',').map(Number);
+    return { x, z };
+  });
+  
+  while (currentBlocks.length < targetBlocksCount) {
+    const base = currentBlocks[Math.floor(Math.random() * currentBlocks.length)];
+    const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
+    const d = dirs[Math.floor(Math.random() * dirs.length)];
+    const nx = base.x + d.dx;
+    const nz = base.z + d.dz;
+    if (nx > 0 && nx < width - 1 && nz > 0 && nz < depth - 1) {
+      const key = `${nx},${nz}`;
+      if (!allPathBlocks.has(key)) {
+        allPathBlocks.add(key);
+        maze[nx][nz].active = true;
+        currentBlocks.push({ x: nx, z: nz });
+      }
+    }
+  }
+  
   let exitCell = cells[0];
   let maxDist = 0;
   cells.forEach(c => {
-    const dist = Math.abs(c.x - startX) + Math.abs(c.z - startZ) + c.y * 2;
+    const dist = Math.abs(c.x - startX) + Math.abs(c.z - startZ);
     if (dist > maxDist) {
       maxDist = dist;
       exitCell = c;
@@ -2299,26 +2313,21 @@ function generateAILabyrinth() {
   });
   
   lvl.start = { x: startX, y: 0, z: startZ };
-  lvl.exit = { x: exitCell.x, y: exitCell.y, z: exitCell.z };
-  lvl.par = Math.round(cells.length * 0.7);
+  lvl.exit = { x: exitCell.x, y: 0, z: exitCell.z };
+  lvl.par = Math.round(currentBlocks.length * 0.5);
   
-  for (let x = 0; x < width; x++) {
-    for (let z = 0; z < depth; z++) {
-      const cell = maze[x][z];
-      if (cell.active) {
-        const key = `${x},${cell.height},${z}`;
-        const isStart = (x === startX && cell.height === 0 && z === startZ);
-        const isExit = (x === exitCell.x && cell.height === exitCell.y && z === exitCell.z);
-        
-        let type = 'normal';
-        if (!isStart && !isExit && Math.random() < 0.18) {
-          type = 'shaker';
-        }
-        
-        lvl.blocks.set(key, { x, y: cell.height, z, type, properties: {} });
-      }
+  currentBlocks.forEach(b => {
+    const key = `${b.x},0,${b.z}`;
+    const isStart = (b.x === startX && b.z === startZ);
+    const isExit = (b.x === exitCell.x && b.z === exitCell.z);
+    
+    let type = 'normal';
+    if (!isStart && !isExit && Math.random() < 0.22) {
+      type = 'shaker';
     }
-  }
+    
+    lvl.blocks.set(key, { x: b.x, y: 0, z: b.z, type, properties: {} });
+  });
   
   const deadEnds = [];
   for (let x = 1; x < width - 1; x += 2) {
@@ -2327,32 +2336,34 @@ function generateAILabyrinth() {
         let conns = 0;
         const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
         dirs.forEach(d => {
-          if (maze[x + d.dx][z + d.dz].active) conns++;
+          if (x + d.dx > 0 && x + d.dx < width && z + d.dz > 0 && z + d.dz < depth) {
+            if (maze[x + d.dx][z + d.dz].active) conns++;
+          }
         });
         if (conns === 1) {
           const isStart = (x === startX && z === startZ);
           const isExit = (x === exitCell.x && z === exitCell.z);
           if (!isStart && !isExit) {
-            deadEnds.push({ x, y: maze[x][z].height, z });
+            deadEnds.push({ x, z });
           }
         }
       }
     }
   }
   
-  let prismsToPlace = Math.min(deadEnds.length, 5);
-  if (prismsToPlace < 2) {
-    prismsToPlace = 3;
-    const shuffled = [...cells].filter(c => !(c.x === startX && c.z === startZ) && !(c.x === exitCell.x && c.z === exitCell.z)).sort(() => 0.5 - Math.random());
+  let prismsToPlace = Math.min(deadEnds.length, 8);
+  if (prismsToPlace < 3) {
+    prismsToPlace = 6;
+    const shuffled = currentBlocks.filter(b => !(b.x === startX && b.z === startZ) && !(b.x === exitCell.x && b.z === exitCell.z)).sort(() => 0.5 - Math.random());
     for (let i = 0; i < prismsToPlace; i++) {
       if (shuffled[i]) {
-        lvl.prisms.set(`${shuffled[i].x},${shuffled[i].y},${shuffled[i].z}`, { type: 'prism' });
+        lvl.prisms.set(`${shuffled[i].x},0,${shuffled[i].z}`, { type: 'prism' });
       }
     }
   } else {
     const shuffled = deadEnds.sort(() => 0.5 - Math.random());
     for (let i = 0; i < prismsToPlace; i++) {
-      lvl.prisms.set(`${shuffled[i].x},${shuffled[i].y},${shuffled[i].z}`, { type: 'prism' });
+      lvl.prisms.set(`${shuffled[i].x},0,${shuffled[i].z}`, { type: 'prism' });
     }
   }
   
@@ -3119,6 +3130,7 @@ document.getElementById('btn-ai-generate').addEventListener('click', () => {
     activeLevel = lvl;
     document.getElementById('level-name-input').value = lvl.name;
     document.getElementById('world-select').value = lvl.world;
+    adjustEditHeight(-editY); // Reset edit height to 0
     buildLevel3D(lvl);
     drawEditorWires();
     showMessage('AI LABYRINTH GENERATED');

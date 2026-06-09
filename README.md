@@ -48,7 +48,7 @@ An integrated, glassmorphic **3D Level Editor** allows you to build, playtest, s
 - **Drag-Painting**: Left-click and drag to paint lines of blocks or erase them, locked to the active height layer.
 - **Linker Tool**: Connect switches/pressure plates to bridges/platforms, link portals, or set moving platform routes.
 - **Import / Export**: Save levels locally in browser storage, export them as portable `.json` files, or upload custom JSON files.
-- **AI Labyrinth Generator**: Instantly generate a complex, fully navigable 3D heightmap maze built using only `normal` blocks and `shaker` blocks. It places collectible prisms at dead ends and sets dynamic move par goals.
+- **AI Labyrinth Generator**: Instantly generate a complex, fully navigable flat Y=0 maze built using exactly 800 elements (normal and shaker blocks). It places collectible prisms at dead ends and sets dynamic move par goals.
 
 ---
 
