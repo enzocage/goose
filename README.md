@@ -6,6 +6,18 @@ Created and programmed by **Felix Schmidt**.
 
 ---
 
+## 📸 Screenshots
+
+![Goose 3D Level Editor & Interface](Screenshot%20(11).png)
+
+*Figure 1: The interactive 3D Level Editor with the height ruler and layer slice visualization.*
+
+![Goose 3D Gameplay & Physics](Screenshot%20(12).png)
+
+*Figure 2: Active gameplay showcasing the 3D physics, rolling mini-cube, and collectable prisms.*
+
+---
+
 ## 🎮 Game Overview
 
 **GOOSE** is a 3D adaptation of the classic puzzle-platformer gameplay. Control a rolling cube on a grid, collect glowing prisms, and find your way to the exit portal. The game combines physical movement puzzles, timing challenges, and logic-based mechanics.
