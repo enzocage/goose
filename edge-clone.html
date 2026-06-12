@@ -471,6 +471,7 @@
     </div>
     
     <div style="display:flex; gap:8px;">
+      <button id="btn-demo-level" class="editor-btn success" title="Load the demo level that showcases every gameplay element">Demo</button>
       <button id="btn-ai-generate" class="editor-btn success" title="Generate an AI 3D Labyrinth">AI Gen</button>
       <button id="btn-toggle-slice" class="editor-btn success" title="Toggle layer slicing (hides blocks above current height)">Slice: ON</button>
       <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
@@ -511,13 +512,15 @@
   <!-- Floating Instructions Guide -->
   <div id="editor-instructions">
     <div class="panel-header" style="border:none; margin:0; padding:0;">Controls Guide</div>
-    <div class="instruction-row"><span>Left Click</span><span>Place Voxel</span></div>
-    <div class="instruction-row"><span>Right Click</span><span>Erase Voxel</span></div>
-    <div class="instruction-row"><span>Mouse Drag</span><span>Rotate View</span></div>
-    <div class="instruction-row"><span>WASD Keys</span><span>Pan Camera</span></div>
-    <div class="instruction-row"><span>Q / E Keys</span><span>Rotate Yaw</span></div>
-    <div class="instruction-row"><span>Wheel</span><span>Zoom / Height</span></div>
-    <div class="instruction-row"><span>Linker Tool</span><span>Click switch then target</span></div>
+    <div class="instruction-row"><span>Left Click</span><span>Place / Paint</span></div>
+    <div class="instruction-row"><span>Right Click</span><span>Erase (Tap)</span></div>
+    <div class="instruction-row"><span>Right Drag</span><span>Rotate View</span></div>
+    <div class="instruction-row"><span>WASD / Q E</span><span>Pan / Rotate</span></div>
+    <div class="instruction-row"><span>R / F</span><span>Height Up / Down</span></div>
+    <div class="instruction-row"><span>Shift+Wheel</span><span>Height · Wheel: Zoom</span></div>
+    <div class="instruction-row"><span>1-0, X, L</span><span>Tool Hotkeys</span></div>
+    <div class="instruction-row"><span>Linker</span><span>Source ➜ Target (ESC)</span></div>
+    <div class="instruction-row"><span>Moving</span><span>Place, then Link dest.</span></div>
   </div>
 
 </div>
@@ -901,6 +904,81 @@ const LEVELS = [
 ];
 
 /* ═══════════════════════════════════════════════════════════
+   BUILT-IN DEMO LEVEL — showcases every gameplay element once:
+   normal, fragile, ice, switch+bridge, climbing stairs, crate +
+   pressure plate gate, moving platform, shaker, danger, booster,
+   teleporter pair, mini-prism (wall climb + bridge squeeze), prisms.
+   ═══════════════════════════════════════════════════════════ */
+const DEMO_LEVEL = {
+  name: '★ Element Showcase',
+  world: 2,
+  par: 60,
+  start: [0, 0, 0],
+  exit: [44, 0, 8],
+  blocks: [
+    // 1) Basics
+    [0,0,0,'normal',{}],[1,0,0,'normal',{}],[2,0,0,'normal',{}],[3,0,0,'normal',{}],
+    // 2) Fragile crossing (breaks behind you)
+    [4,0,0,'fragile',{}],[5,0,0,'fragile',{}],
+    [6,0,0,'normal',{}],
+    // 3) Ice slide (auto-slides until solid ground)
+    [7,0,0,'ice',{}],[8,0,0,'ice',{}],[9,0,0,'ice',{}],[10,0,0,'ice',{}],
+    [11,0,0,'normal',{}],
+    // 4) Switch toggles the bridge gap
+    [12,0,0,'switch',{}],
+    [13,0,0,'bridge',{}],[14,0,0,'bridge',{}],
+    [15,0,0,'normal',{}],
+    // 5) Climbing stairs up to a plateau and back down
+    [16,0,0,'normal',{}],[16,1,0,'normal',{}],
+    [17,0,0,'normal',{}],[17,1,0,'normal',{}],[17,2,0,'normal',{}],
+    [18,0,0,'normal',{}],[18,1,0,'normal',{}],[18,2,0,'normal',{}],
+    [19,0,0,'normal',{}],[19,1,0,'normal',{}],
+    [20,0,0,'normal',{}],
+    // 6) Crate push onto pressure plate opens the gate bridges
+    [20,0,1,'normal',{}],[20,0,2,'normal',{}],[20,0,3,'normal',{}],
+    [20,0,4,'pressureplate',{}],
+    [20,1,2,'pushable',{}],
+    [21,0,3,'bridge',{}],[22,0,3,'bridge',{}],
+    [23,0,3,'normal',{}],
+    // 7) Moving platform ferry across the gap
+    [24,0,3,'moving',{ targetX:26, targetY:0, targetZ:3, speed:1.2 }],
+    [27,0,3,'normal',{}],
+    // 8) Shaker blocks (crumble!) with danger spikes alongside
+    [28,0,3,'shaker',{}],[29,0,3,'shaker',{}],
+    [28,0,2,'danger',{}],[29,0,2,'danger',{}],
+    [30,0,3,'normal',{}],
+    // 9) Booster speed pad
+    [31,0,3,'booster',{}],
+    [32,0,3,'normal',{}],[33,0,3,'normal',{}],[34,0,3,'normal',{}],[35,0,3,'normal',{}],
+    // 10) Teleporter pair to the mini-cube island
+    [36,0,3,'teleporter',{}],
+    [36,0,8,'teleporter',{}],
+    [37,0,8,'normal',{}],
+    // 11) Mini-cube wall climb (2-high wall, mini only)
+    [38,0,8,'normal',{}],[38,1,8,'normal',{}],[38,2,8,'normal',{}],
+    [39,0,8,'normal',{}],[39,1,8,'normal',{}],
+    [40,0,8,'normal',{}],
+    // 12) Mini-cube squeeze tunnel under bridges (roof blocks the big cube)
+    [41,0,8,'normal',{}],[41,1,8,'bridge',{}],[41,2,8,'normal',{}],
+    [42,0,8,'normal',{}],[42,1,8,'bridge',{}],[42,2,8,'normal',{}],
+    [43,0,8,'normal',{}],
+    // 13) Exit
+    [44,0,8,'normal',{}],
+  ],
+  prisms: [
+    [2,0,0,'prism'],[9,0,0,'prism'],[18,2,0,'prism'],[33,0,3,'prism'],[43,0,8,'prism'],
+    [37,0,8,'miniprism'],[40,0,8,'miniprism'],
+  ],
+  links: [
+    { type:'switch-trigger', from:'12,0,0', to:'13,0,0' },
+    { type:'switch-trigger', from:'12,0,0', to:'14,0,0' },
+    { type:'switch-trigger', from:'20,0,4', to:'21,0,3' },
+    { type:'switch-trigger', from:'20,0,4', to:'22,0,3' },
+    { type:'teleporter-link', k1:'36,0,3', k2:'36,0,8' },
+  ],
+};
+
+/* ═══════════════════════════════════════════════════════════
    THREE.JS SETUP
    ═══════════════════════════════════════════════════════════ */
 const container = document.getElementById('canvas-container');
@@ -995,6 +1073,7 @@ class Level3D {
 let currentLevelIdx = 0;
 let customLevels = []; // Array of Level3D loaded from LocalStorage
 let activeLevel = null; // Current playing Level3D
+let levelSnapshot = null; // Serialized pristine state, used for full reset on death/restart
 
 let activeBlocks = new Map(); // key -> block representation
 let activePrisms = new Map(); // key -> prism representation
@@ -1067,6 +1146,7 @@ let editorCameraZoom = 15;
 let isDraggingCamera = false;
 let dragStartMouse = { x:0, y:0 };
 let isPainting = false;
+let rightDragMoved = false; // suppress erase-on-release after a camera drag
 
 let linkerSourceKey = null; // Stored switch/tp for linking
 
@@ -1248,15 +1328,16 @@ function getPlayerWorldPos(gx, gy, gz, miniState) {
 function buildLevel3D(level3D) {
   clearLevel();
   activeLevel = level3D;
+  levelSnapshot = serializeLevel(level3D);
   const world = WORLDS[level3D.world];
 
   scene.background = new THREE.Color(world.bg);
   scene.fog = new THREE.Fog(world.bg, 12, 38);
   audio.startAmbient(level3D.world);
 
-  // Parse Level Configs
+  // Parse Level Configs (everything starts active; link targets are switched off below)
   level3D.blocks.forEach((b, k) => {
-    activeBlocks.set(k, { ...b, broken: false, active: b.type !== 'bridge' });
+    activeBlocks.set(k, { ...b, broken: false, active: true });
   });
   level3D.prisms.forEach((p, k) => {
     activePrisms.set(k, { ...p, collected: false });
@@ -1267,7 +1348,8 @@ function buildLevel3D(level3D) {
       if (!switchMap.has(l.from)) switchMap.set(l.from, []);
       switchMap.get(l.from).push(l.to);
       const target = activeBlocks.get(l.to);
-      if (target && target.type === 'bridge') target.active = false; // bridges start off
+      // Triggered bridges/platforms start off until their switch activates them
+      if (target && (target.type === 'bridge' || target.type === 'moving')) target.active = false;
     } else if (l.type === 'teleporter-link') {
       teleporterMap.set(l.k1, l.k2);
       teleporterMap.set(l.k2, l.k1);
@@ -1280,7 +1362,7 @@ function buildLevel3D(level3D) {
       const mp = new MovingPlatform(
         key, block.x, block.y, block.z,
         block.properties.targetX ?? block.x, block.properties.targetY ?? block.y, block.properties.targetZ ?? block.z,
-        block.properties.speed ?? 1.5, true
+        block.properties.speed ?? 1.5, block.active !== false
       );
       movingPlatformsList.push(mp);
       block.platformInstance = mp;
@@ -1290,17 +1372,7 @@ function buildLevel3D(level3D) {
   });
 
   // Render Prisms
-  activePrisms.forEach((p, key) => {
-    const [px,py,pz] = key.split(',').map(Number);
-    const isMiniPrism = p.type === 'miniprism';
-    const mesh = new THREE.Mesh(geoPrism, isMiniPrism ? matMiniPrism.clone() : matPrism.clone());
-    if (isMiniPrism) mesh.scale.set(0.6, 0.6, 0.6);
-    mesh.position.set(px, py + 0.55, pz);
-    mesh.castShadow = true;
-    mesh.userData = { key, type: isMiniPrism ? 'miniprism' : 'prism', isMiniPrism, baseY: py + 0.55 };
-    prismsGroup.add(mesh);
-    p.mesh = mesh;
-  });
+  activePrisms.forEach((p, key) => createPrismMesh(key, p));
 
   // Goal exit
   exitPos = { ...level3D.exit };
@@ -1339,7 +1411,10 @@ function buildLevel3D(level3D) {
 
 function createBlockMesh(block, key) {
   const { x, y, z, type, active } = block;
-  if (type === 'bridge' && !active) return; // Hide inactive bridge
+  const isInactiveBridge = type === 'bridge' && !active;
+  // Inactive bridges are hidden in play, but shown as ghosts in the editor
+  // so they can be selected and linked.
+  if (isInactiveBridge && (!isEditMode || isPlaytesting)) return;
 
   let mat = matTileBase;
   if (type === 'fragile') mat = matTileFragile;
@@ -1380,6 +1455,10 @@ function createBlockMesh(block, key) {
 
   const line = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color:eColor, transparent:true, opacity:0.35 }));
   mesh.add(line);
+  if (isInactiveBridge) {
+    mesh.material.transparent = true;
+    mesh.material.opacity = 0.18;
+  }
   tilesGroup.add(mesh);
   block.mesh = mesh;
 
@@ -1423,6 +1502,18 @@ function createBlockMesh(block, key) {
     arrow.position.set(0, 0.5 + 0.05, 0);
     mesh.add(arrow);
   }
+}
+
+function createPrismMesh(key, p) {
+  const [px, py, pz] = key.split(',').map(Number);
+  const isMiniPrism = p.type === 'miniprism';
+  const mesh = new THREE.Mesh(geoPrism, isMiniPrism ? matMiniPrism.clone() : matPrism.clone());
+  if (isMiniPrism) mesh.scale.set(0.6, 0.6, 0.6);
+  mesh.position.set(px, py + 0.55, pz);
+  mesh.castShadow = true;
+  mesh.userData = { key, type: isMiniPrism ? 'miniprism' : 'prism', isMiniPrism, baseY: py + 0.55 };
+  prismsGroup.add(mesh);
+  p.mesh = mesh;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1663,7 +1754,8 @@ function updatePressurePlates() {
       const playerOnIt = (playerGridPos.x === block.x && playerGridPos.y === block.y && playerGridPos.z === block.z && !isRolling && !isFalling && !isTeleporting);
       let blockOnIt = false;
       activeBlocks.forEach(b => {
-        if (b.type === 'pushable' && b.x === block.x && b.y === block.y && b.z === block.z) {
+        // A crate resting ON the plate sits one cell above it
+        if (b.type === 'pushable' && b.x === block.x && b.y === block.y + 1 && b.z === block.z) {
           blockOnIt = true;
         }
       });
@@ -1764,9 +1856,10 @@ function triggerShakerCrumble(block, key) {
     if (block.mesh && !block.broken) {
       breakFragileBlock(key);
       if (playerGridPos.x === block.x && playerGridPos.y === block.y && playerGridPos.z === block.z) {
+        const landing = getBlocksInColumn(block.x, block.z).find(b => b.y < playerGridPos.y);
         isFalling = true;
         fallVelY = 0;
-        playerCube.userData.fallTargetY = -10; // drop to void
+        playerCube.userData.fallTargetY = landing ? landing.y : -10;
       }
     }
   }, 600);
@@ -1791,18 +1884,21 @@ function startRoll(dirX, dirZ) {
   const toGZ = playerGridPos.z + dirZ;
   const colBlocks = getBlocksInColumn(toGX, toGZ);
 
-  // Check if target has a pushable block at same height
-  const sameLevelCheck = colBlocks.find(b => b.y === playerGridPos.y);
-  if (sameLevelCheck && sameLevelCheck.type === 'pushable' && !sameLevelCheck.broken) {
+  // Crate occupying the cell the player would roll into (resting one above
+  // the player's support level, like the player itself does)
+  const crate = colBlocks.find(b => b.y === playerGridPos.y + 1 && b.type === 'pushable' && !b.broken);
+  if (crate) {
     const pushToX = toGX + dirX;
     const pushToZ = toGZ + dirZ;
     const pushCol = getBlocksInColumn(pushToX, pushToZ);
-    const pushObstructed = pushCol.some(b => b.y >= playerGridPos.y);
-    if (!pushObstructed) {
-      executePush(sameLevelCheck, pushToX, playerGridPos.y, pushToZ, dirX, dirZ);
+    const pushObstructed = pushCol.some(b => b.y >= crate.y);
+    const floorUnderCrate = colBlocks.find(b => b.y === playerGridPos.y);
+    if (!pushObstructed && floorUnderCrate) {
+      executePush(crate, pushToX, crate.y, pushToZ, dirX, dirZ);
       executeRoll(toGX, playerGridPos.y, toGZ, dirX, dirZ, 'roll');
       return;
     }
+    // Blocked push: the crate acts like a wall/step (handled below)
   }
 
   // Ceilings directly above player
@@ -1816,17 +1912,22 @@ function startRoll(dirX, dirZ) {
   let targetY = playerGridPos.y;
   let action = 'roll'; // roll, climb, descend, fall, void, blocked
 
-  if (isMini && (stepUp || sameLevel)) {
-    // Mini-cube vertical wall climb logic
-    const wall = colBlocks.find(b => b.y >= playerGridPos.y);
-    if (wall && !ceilingCurrent) {
+  if (isMini && stepUp && stepUp.type !== 'bridge') {
+    // Mini-cube vertical wall climb: only when a normal climb is impossible
+    // (the wall continues at least two cells high) — climbs the face one
+    // cell per move while staying in place.
+    const aboveTwo = colBlocks.find(b => b.y === playerGridPos.y + 2);
+    if (aboveTwo && !ceilingCurrent) {
       action = 'wall-climb';
       targetY = playerGridPos.y + 1;
     }
   }
 
   if (action !== 'wall-climb') {
-    if (stepUp) {
+    if (isMini && sameLevel && stepUp && stepUp.type === 'bridge') {
+      // Mini cube squeezes under bridges instead of climbing onto them
+      targetY = playerGridPos.y; action = 'roll';
+    } else if (stepUp) {
       const stepUpCeiling = colBlocks.find(b => b.y === playerGridPos.y + 2);
       if (!stepUpCeiling && !ceilingCurrent) {
         targetY = playerGridPos.y + 1; action = 'climb';
@@ -1905,11 +2006,6 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
   const prevBlock = activeBlocks.get(prevKey);
   if (prevBlock && prevBlock.type === 'fragile') {
     breakFragileBlock(prevKey);
-  }
-
-  // Trigger switch on roll start
-  if (prevBlock && prevBlock.type === 'switch') {
-    triggerSwitch(prevKey);
   }
 
   // Next steps on complete
@@ -2201,20 +2297,17 @@ function completeLevel() {
 }
 
 function respawnPlayer() {
-  isRolling = false; isBalancing = false; isTeleporting = false; isFalling = false; isLevelComplete = false;
   audio.playRespawn();
   addShake(0.3);
   flashScreen('#ff3355');
 
-  playerGridPos = { ...activeLevel.start };
-  isMini = false; miniTimer = 0;
-  document.getElementById('mini-hud-bar').style.display = 'none';
-  playerCube.scale.set(1,1,1);
-  playerCube.position.copy(getPlayerWorldPos(playerGridPos.x, playerGridPos.y, playerGridPos.z, false));
-  playerCube.quaternion.identity();
-
-  cameraTarget.copy(playerCube.position);
-  cameraLookAt.copy(playerCube.position);
+  // Full level reset from the pristine snapshot — restores broken fragile/
+  // shaker blocks, pushed crates, switch states and prisms (no softlocks).
+  if (levelSnapshot) {
+    activeLevel = deserializeLevel(levelSnapshot);
+    buildLevel3D(activeLevel);
+  }
+  showMessage('LEVEL RESTART', 1.2);
 }
 
 function generateAILabyrinth() {
@@ -2496,12 +2589,13 @@ function updateEditorSlicing() {
     } else {
       b.mesh.visible = true;
       if (b.pillar) b.pillar.visible = true;
+      const baseOpacity = b.type === 'bridge' ? (b.active === false ? 0.18 : 0.4) : 1.0;
       if (b.y < editY) {
         b.mesh.material.transparent = true;
-        b.mesh.material.opacity = 0.4;
+        b.mesh.material.opacity = Math.min(0.4, baseOpacity);
       } else {
         b.mesh.material.transparent = b.type === 'bridge';
-        b.mesh.material.opacity = b.type === 'bridge' ? 0.4 : 1.0;
+        b.mesh.material.opacity = baseOpacity;
       }
     }
   });
@@ -2538,9 +2632,28 @@ function updateEditorSlicing() {
   });
 }
 
+function loadDemoLevel() {
+  isCustomLevel = true;
+  activeLevel = deserializeLevel(JSON.stringify(DEMO_LEVEL));
+  document.getElementById('level-name-input').value = activeLevel.name;
+  document.getElementById('world-select').value = activeLevel.world;
+  buildLevel3D(activeLevel);
+  if (isEditMode && !isPlaytesting) drawEditorWires();
+  showMessage('DEMO LEVEL LOADED');
+}
+
 function updateLibraryList() {
   const list = document.getElementById('custom-levels-list');
   list.innerHTML = '';
+  // Built-in demo level showcasing every gameplay element
+  const demoItem = document.createElement('div');
+  demoItem.className = 'library-item';
+  demoItem.innerHTML = `<span style="color:var(--gold);">★ Element Showcase</span>`;
+  demoItem.addEventListener('click', () => {
+    loadDemoLevel();
+    document.getElementById('editor-library-panel').style.display = 'none';
+  });
+  list.appendChild(demoItem);
   // Load local custom levels keys
   let store = {};
   try {
@@ -2635,7 +2748,9 @@ function editorRaycast(e) {
     const blockPos = hit.object.position.clone();
     // Voxel stack position
     const targetPos = blockPos.clone();
-    if (selectedTool !== 'eraser' && selectedTool !== 'linker') {
+    // Only block tools build adjacent to the clicked face; items (start/exit/
+    // prism), eraser and linker target the clicked cell itself.
+    if (BLOCK_TOOLS.includes(selectedTool)) {
       targetPos.add(normal);
     }
     return {
@@ -2662,58 +2777,159 @@ function editorRaycast(e) {
   return null;
 }
 
+const BLOCK_TOOLS = ['normal', 'fragile', 'ice', 'switch', 'bridge', 'teleporter', 'moving', 'pushable', 'pressureplate', 'danger', 'shaker', 'booster'];
+
+function snapItemCell(hit) {
+  // Items (start/exit/prisms) must sit on a block cell to be reachable.
+  // When clicking a block, use that cell; on empty grid cells, snap down
+  // to the top block of the column.
+  if (hit.hitKey && hit.hitType !== 'prism' && hit.hitType !== 'miniprism') {
+    return { x: hit.x, y: hit.y, z: hit.z };
+  }
+  let topY = null;
+  activeLevel.blocks.forEach(b => {
+    if (b.x === hit.x && b.z === hit.z && b.y <= hit.y && (topY === null || b.y > topY)) topY = b.y;
+  });
+  return { x: hit.x, y: topY !== null ? topY : hit.y, z: hit.z };
+}
+
+// Incremental editing — avoids a full level rebuild (and audio restart) on
+// every placed/erased voxel, which made painting large levels laggy.
+function editorEraseKey(key, kinds = ['block', 'prism']) {
+  let removed = false;
+  if (kinds.includes('prism') && activeLevel.prisms.has(key)) {
+    activeLevel.prisms.delete(key);
+    const p = activePrisms.get(key);
+    if (p && p.mesh) { prismsGroup.remove(p.mesh); if (p.mesh.material) p.mesh.material.dispose(); }
+    activePrisms.delete(key);
+    removed = true;
+  }
+  if (kinds.includes('block') && activeLevel.blocks.has(key)) {
+    const hasLinks = activeLevel.links.some(l => l.from === key || l.to === key || l.k1 === key || l.k2 === key);
+    activeLevel.blocks.delete(key);
+    if (hasLinks) {
+      // Removing a linked block changes trigger wiring — full rebuild
+      activeLevel.links = activeLevel.links.filter(l => l.from !== key && l.to !== key && l.k1 !== key && l.k2 !== key);
+      buildLevel3D(activeLevel);
+      drawEditorWires();
+      return true;
+    }
+    const b = activeBlocks.get(key);
+    if (b) {
+      if (b.platformInstance) {
+        const i = movingPlatformsList.indexOf(b.platformInstance);
+        if (i >= 0) movingPlatformsList.splice(i, 1);
+        b.platformInstance.dispose();
+      }
+      if (b.mesh) {
+        tilesGroup.remove(b.mesh);
+        if (b.mesh.material) b.mesh.material.dispose();
+        b.mesh.children.forEach(ch => { if (ch.material) ch.material.dispose(); });
+      }
+      activeBlocks.delete(key);
+    }
+    removed = true;
+    drawEditorWires();
+  }
+  return removed;
+}
+
+function editorPlaceBlock(x, y, z, type) {
+  const key = `${x},${y},${z}`;
+  const existing = activeLevel.blocks.get(key);
+  if (existing && existing.type === type) return false;
+  if (existing) editorEraseKey(key, ['block']);
+  const b = { x, y, z, type, properties: {} };
+  activeLevel.blocks.set(key, b);
+  const rb = { ...b, broken: false, active: true };
+  activeBlocks.set(key, rb);
+  if (type === 'moving') {
+    const mp = new MovingPlatform(key, x, y, z, x, y, z, 1.5, true);
+    movingPlatformsList.push(mp);
+    rb.platformInstance = mp;
+  } else {
+    createBlockMesh(rb, key);
+  }
+  updateEditorSlicing();
+  return true;
+}
+
+function editorPlacePrism(x, y, z, type) {
+  const key = `${x},${y},${z}`;
+  const existing = activeLevel.prisms.get(key);
+  if (existing && existing.type === type) return false;
+  if (existing) editorEraseKey(key, ['prism']);
+  activeLevel.prisms.set(key, { type });
+  const p = { type, collected: false };
+  activePrisms.set(key, p);
+  createPrismMesh(key, p);
+  updateEditorSlicing();
+  return true;
+}
+
+function editorSetStart(c) {
+  activeLevel.start = { x: c.x, y: c.y, z: c.z };
+  playerGridPos = { ...activeLevel.start };
+  if (playerCube) {
+    playerCube.position.copy(getPlayerWorldPos(c.x, c.y, c.z, false));
+    playerCube.quaternion.identity();
+  }
+  audio.playRespawn();
+}
+
 function handleEditorClick(e) {
   const hit = editorRaycast(e);
   if (!hit) return;
 
-  const key = `${hit.x},${hit.y},${hit.z}`;
-
   if (selectedTool === 'eraser') {
     if (hit.hitKey) {
-      if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
-        activeLevel.prisms.delete(hit.hitKey);
-      } else {
-        activeLevel.blocks.delete(hit.hitKey);
-        // Clean links containing key
-        activeLevel.links = activeLevel.links.filter(l => l.from !== hit.hitKey && l.to !== hit.hitKey && l.k1 !== hit.hitKey && l.k2 !== hit.hitKey);
-      }
-      buildLevel3D(activeLevel);
-      drawEditorWires();
-      audio.playBreak();
+      const kinds = (hit.hitType === 'prism' || hit.hitType === 'miniprism') ? ['prism'] : ['block'];
+      if (editorEraseKey(hit.hitKey, kinds)) audio.playBreak();
     }
     return;
   }
 
   if (selectedTool === 'linker') {
-    if (!hit.hitKey) return;
     if (linkerSourceKey === null) {
       // Set Source
+      if (!hit.hitKey) return;
       const block = activeLevel.blocks.get(hit.hitKey);
       if (block && (block.type === 'switch' || block.type === 'pressureplate' || block.type === 'teleporter' || block.type === 'moving')) {
         linkerSourceKey = hit.hitKey;
-        showMessage('SOURCE SELECTED. CLICK TARGET BLOCK');
+        if (block.type === 'moving') showMessage('PLATFORM SELECTED — CLICK DESTINATION CELL');
+        else if (block.type === 'teleporter') showMessage('PORTAL SELECTED — CLICK SECOND PORTAL');
+        else showMessage('SOURCE SELECTED — CLICK A BRIDGE OR MOVING PLATFORM');
+      } else {
+        showMessage('SELECT A SWITCH, PLATE, PORTAL OR MOVING PLATFORM', 1.6);
       }
-    } else {
-      // Connect to Target
-      const source = activeLevel.blocks.get(linkerSourceKey);
-      const target = activeLevel.blocks.get(hit.hitKey);
-
-      if (source && target && linkerSourceKey !== hit.hitKey) {
-        if ((source.type === 'switch' || source.type === 'pressureplate') && (target.type === 'bridge' || target.type === 'moving')) {
-          activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: hit.hitKey });
-          showMessage('TRIGGER LINKED SUCCESS');
-        } else if (source.type === 'teleporter' && target.type === 'teleporter') {
-          activeLevel.links.push({ type: 'teleporter-link', k1: linkerSourceKey, k2: hit.hitKey });
-          showMessage('PORTALS LINKED');
-        } else if (source.type === 'moving') {
-          // Set moving platform end target
-          source.properties.targetX = target.x;
-          source.properties.targetY = target.y;
-          source.properties.targetZ = target.z;
-          showMessage('PLATFORM DESTINATION SET');
-        }
+      return;
+    }
+    // Connect to Target
+    const source = activeLevel.blocks.get(linkerSourceKey);
+    const target = hit.hitKey ? activeLevel.blocks.get(hit.hitKey) : null;
+    let linked = false;
+    if (source && source.type === 'moving' && linkerSourceKey !== hit.hitKey) {
+      // Moving platforms may target any cell, including empty grid cells
+      source.properties.targetX = target ? target.x : hit.x;
+      source.properties.targetY = target ? target.y : hit.y;
+      source.properties.targetZ = target ? target.z : hit.z;
+      showMessage('PLATFORM DESTINATION SET');
+      linked = true;
+    } else if (source && target && linkerSourceKey !== hit.hitKey) {
+      if ((source.type === 'switch' || source.type === 'pressureplate') && (target.type === 'bridge' || target.type === 'moving')) {
+        activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: hit.hitKey });
+        showMessage('TRIGGER LINKED');
+        linked = true;
+      } else if (source.type === 'teleporter' && target.type === 'teleporter') {
+        activeLevel.links.push({ type: 'teleporter-link', k1: linkerSourceKey, k2: hit.hitKey });
+        showMessage('PORTALS LINKED');
+        linked = true;
+      } else {
+        showMessage('INVALID LINK TARGET', 1.4);
       }
-      linkerSourceKey = null;
+    }
+    linkerSourceKey = null;
+    if (linked) {
       buildLevel3D(activeLevel);
       drawEditorWires();
     }
@@ -2721,20 +2937,16 @@ function handleEditorClick(e) {
   }
 
   // Placement tools
-  if (['normal', 'fragile', 'ice', 'switch', 'bridge', 'teleporter', 'moving', 'pushable', 'pressureplate', 'danger', 'shaker', 'booster'].includes(selectedTool)) {
-    activeLevel.blocks.set(key, { x: hit.x, y: hit.y, z: hit.z, type: selectedTool, properties: {} });
-    buildLevel3D(activeLevel);
-    audio.playRoll();
+  if (BLOCK_TOOLS.includes(selectedTool)) {
+    if (editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playRoll();
   } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
-    activeLevel.prisms.set(key, { type: selectedTool });
-    buildLevel3D(activeLevel);
-    audio.playCollect();
+    const c = snapItemCell(hit);
+    if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
   } else if (selectedTool === 'start') {
-    activeLevel.start = { x: hit.x, y: hit.y, z: hit.z };
-    buildLevel3D(activeLevel);
-    audio.playRespawn();
+    editorSetStart(snapItemCell(hit));
   } else if (selectedTool === 'exit') {
-    activeLevel.exit = { x: hit.x, y: hit.y, z: hit.z };
+    const c = snapItemCell(hit);
+    activeLevel.exit = { x: c.x, y: c.y, z: c.z };
     buildLevel3D(activeLevel);
     audio.playComplete();
   }
@@ -2760,45 +2972,23 @@ function handleEditorDragClick(e) {
     const key = `${gx},${gy},${gz}`;
 
     if (selectedTool === 'eraser') {
-      let deleted = false;
-      if (activeLevel.blocks.has(key)) {
-        activeLevel.blocks.delete(key);
-        deleted = true;
-      }
-      if (activeLevel.prisms.has(key)) {
-        activeLevel.prisms.delete(key);
-        deleted = true;
-      }
-      if (deleted) {
-        activeLevel.links = activeLevel.links.filter(l => l.from !== key && l.to !== key && l.k1 !== key && l.k2 !== key);
-        buildLevel3D(activeLevel);
-        drawEditorWires();
-        audio.playBreak();
-      }
-    } else if (['normal', 'fragile', 'ice', 'switch', 'bridge', 'teleporter', 'moving', 'pushable', 'pressureplate', 'danger', 'shaker', 'booster'].includes(selectedTool)) {
-      const existing = activeLevel.blocks.get(key);
-      if (!existing || existing.type !== selectedTool) {
-        activeLevel.blocks.set(key, { x: gx, y: gy, z: gz, type: selectedTool, properties: {} });
-        buildLevel3D(activeLevel);
-        audio.playRoll();
-      }
+      if (editorEraseKey(key)) audio.playBreak();
+    } else if (BLOCK_TOOLS.includes(selectedTool)) {
+      if (editorPlaceBlock(gx, gy, gz, selectedTool)) audio.playRoll();
     } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
-      const existing = activeLevel.prisms.get(key);
-      if (!existing || existing.type !== selectedTool) {
-        activeLevel.prisms.set(key, { type: selectedTool });
-        buildLevel3D(activeLevel);
-        audio.playCollect();
-      }
+      const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
+      if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
     } else if (selectedTool === 'start') {
-      if (activeLevel.start.x !== gx || activeLevel.start.y !== gy || activeLevel.start.z !== gz) {
-        activeLevel.start = { x: gx, y: gy, z: gz };
-        buildLevel3D(activeLevel);
-        audio.playRespawn();
+      const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
+      if (activeLevel.start.x !== c.x || activeLevel.start.y !== c.y || activeLevel.start.z !== c.z) {
+        editorSetStart(c);
       }
     } else if (selectedTool === 'exit') {
-      if (activeLevel.exit.x !== gx || activeLevel.exit.y !== gy || activeLevel.exit.z !== gz) {
-        activeLevel.exit = { x: gx, y: gy, z: gz };
+      const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
+      if (activeLevel.exit.x !== c.x || activeLevel.exit.y !== c.y || activeLevel.exit.z !== c.z) {
+        activeLevel.exit = { x: c.x, y: c.y, z: c.z };
         buildLevel3D(activeLevel);
+        drawEditorWires();
         audio.playComplete();
       }
     }
@@ -2901,6 +3091,10 @@ window.addEventListener('keydown', (e) => {
   audio.init();
   keysPressed[e.code] = true;
 
+  // Never hijack keys while typing in inputs (level name, import JSON, …)
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return;
+
   if (isBalancing) {
     let rollBack = false;
     if (lastMoveDir.x === 1 && (e.code === 'ArrowLeft' || e.code === 'KeyA')) rollBack = true;
@@ -2914,6 +3108,19 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (isEditMode && !isPlaytesting) {
+    // Tool hotkeys: 1-9 and 0 pick the first ten tools, X = eraser, L = linker
+    const digit = e.code.match(/^Digit(\d)$/);
+    if (digit) {
+      const idx = (parseInt(digit[1], 10) + 9) % 10;
+      if (toolButtons[idx]) selectToolByName(toolButtons[idx].dataset.tool);
+      return;
+    }
+    if (e.code === 'KeyX') { selectToolByName('eraser'); return; }
+    if (e.code === 'KeyL') { selectToolByName('linker'); return; }
+    if (e.code === 'Escape') {
+      if (linkerSourceKey) { linkerSourceKey = null; showMessage('LINK CANCELLED', 1); }
+      return;
+    }
     // Editor Camera pan keys
     const moveSpeed = 8;
     const forward = new THREE.Vector3();
@@ -2975,6 +3182,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
   } else {
     // Right click rotate camera / erase
     isDraggingCamera = true;
+    rightDragMoved = false;
     dragStartMouse = { x: e.clientX, y: e.clientY };
   }
 });
@@ -2985,6 +3193,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
   if (isDraggingCamera) {
     const dx = e.clientX - dragStartMouse.x;
     const dy = e.clientY - dragStartMouse.y;
+    if (Math.abs(dx) + Math.abs(dy) > 2) rightDragMoved = true;
     editorCameraYaw -= dx * 0.005;
     editorCameraPitch = Math.max(0.1, Math.min(Math.PI/2 - 0.1, editorCameraPitch + dy * 0.005));
     dragStartMouse = { x: e.clientX, y: e.clientY };
@@ -3025,6 +3234,8 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         else if (selectedTool === 'danger') ghostColor = 0xff3333;
         else if (selectedTool === 'shaker') ghostColor = 0x554444;
         else if (selectedTool === 'booster') ghostColor = 0xffcc00;
+        else if (selectedTool === 'start') ghostColor = 0xff6600;
+        else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
 
         editorGhostBlock.material.color.setHex(ghostColor);
         let targetY = hit.y;
@@ -3034,6 +3245,10 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
           editorGhostBlock.geometry = geoPrism;
           targetY = hit.y + 0.55;
+        } else if (selectedTool === 'start' || selectedTool === 'exit') {
+          // Marker preview floats where the player cube / exit ring appears
+          editorGhostBlock.geometry = geoCube;
+          targetY = hit.y + 1;
         } else {
           editorGhostBlock.geometry = geoTile;
         }
@@ -3045,7 +3260,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
       if (tooltip) {
         let text = `${selectedTool.toUpperCase()}`;
         text += ` <span class="tooltip-coord">(${hit.x}, ${hit.y}, ${hit.z})</span>`;
-        if (hit.hitKey && selectedTool !== 'eraser' && selectedTool !== 'linker') {
+        if (hit.hitKey && BLOCK_TOOLS.includes(selectedTool)) {
           text += ` <span class="tooltip-stacking">Stacking</span>`;
         }
         tooltip.innerHTML = text;
@@ -3074,15 +3289,11 @@ window.addEventListener('mouseup', (e) => {
 renderer.domElement.addEventListener('contextmenu', (e) => {
   if (!isEditMode) return;
   e.preventDefault();
-  // Erase voxel on Right click (unless dragging camera far)
+  // Erase voxel on right-click TAP only — not after rotating the camera
+  if (isPlaytesting || rightDragMoved) return;
   const hit = editorRaycast(e);
   if (hit && hit.hitKey) {
-    activeLevel.blocks.delete(hit.hitKey);
-    activeLevel.prisms.delete(hit.hitKey);
-    activeLevel.links = activeLevel.links.filter(l => l.from !== hit.hitKey && l.to !== hit.hitKey && l.k1 !== hit.hitKey && l.k2 !== hit.hitKey);
-    buildLevel3D(activeLevel);
-    drawEditorWires();
-    audio.playBreak();
+    if (editorEraseKey(hit.hitKey)) audio.playBreak();
   }
 });
 
@@ -3112,12 +3323,15 @@ document.getElementById('btn-editor-toggle').addEventListener('click', () => {
 });
 
 // Toolbox items select
-document.querySelectorAll('.tool-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    selectedTool = btn.dataset.tool;
-  });
+const toolButtons = Array.from(document.querySelectorAll('.tool-btn'));
+function selectToolByName(name) {
+  toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === name));
+  selectedTool = name;
+  linkerSourceKey = null;
+}
+toolButtons.forEach((btn, i) => {
+  if (i < 10) btn.title += ` [${(i + 1) % 10}]`;
+  btn.addEventListener('click', () => selectToolByName(btn.dataset.tool));
 });
 
 document.getElementById('btn-height-down').addEventListener('click', () => adjustEditHeight(-1));
@@ -3136,6 +3350,14 @@ document.getElementById('btn-toggle-slice').addEventListener('click', () => {
 
 document.getElementById('btn-playtest').addEventListener('click', enterPlaytestMode);
 document.getElementById('btn-editor-exit').addEventListener('click', exitEditMode);
+
+document.getElementById('btn-demo-level').addEventListener('click', () => {
+  audio.init();
+  if (confirm("Load the '★ Element Showcase' demo level? This will overwrite your current design.")) {
+    loadDemoLevel();
+    adjustEditHeight(-editY); // reset editing height to 0
+  }
+});
 
 document.getElementById('btn-ai-generate').addEventListener('click', () => {
   audio.init();
