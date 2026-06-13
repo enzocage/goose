@@ -168,6 +168,12 @@
   .editor-btn:hover {
     background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3);
   }
+  .editor-btn:disabled {
+    opacity: 0.35; cursor: not-allowed; background: rgba(255,255,255,0.04);
+  }
+  .editor-btn:disabled:hover {
+    background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.12);
+  }
   .editor-btn.success {
     background: rgba(0, 255, 136, 0.1); border-color: var(--green); color: var(--green);
   }

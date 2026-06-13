@@ -100,6 +100,10 @@ let linkerSourceKey = null; // Stored switch/tp for linking
 // any grouped block expands the trigger to all triggerable members.
 let currentGroupId = null; // active group id while O is held, else null
 
+// Editor undo history — serialized level snapshots, newest last (max 250).
+let undoStack = [];
+const UNDO_LIMIT = 250;
+
 /* ═══════════════════════════════════════════════════════════
    CLEAR / BUILD LEVEL
    ═══════════════════════════════════════════════════════════ */
@@ -139,7 +143,9 @@ function buildLevel3D(level3D) {
   const world = WORLDS[level3D.world];
 
   scene.background = new THREE.Color(world.bg);
-  scene.fog = new THREE.Fog(world.bg, 12, 38);
+  // No fog while editing — zooming out shouldn't darken the level. Fog is kept
+  // for normal play and playtesting.
+  scene.fog = (isEditMode && !isPlaytesting) ? null : new THREE.Fog(world.bg, 12, 38);
   audio.startAmbient(level3D.world);
 
   // Parse Level Configs (everything starts active; link targets are switched off below)
@@ -1328,9 +1334,39 @@ function generateAILabyrinth() {
 /* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR IMPLEMENTATION
    ═══════════════════════════════════════════════════════════ */
+// Snapshot the current level onto the undo history before a mutating edit.
+function pushUndoSnapshot() {
+  if (!activeLevel) return;
+  undoStack.push(serializeLevel(activeLevel));
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  updateUndoButton();
+}
+
+function editorUndo() {
+  if (!isEditMode || isPlaytesting) return;
+  if (!undoStack.length) { showMessage('NOTHING TO UNDO', 1); return; }
+  const snap = undoStack.pop();
+  const lvl = deserializeLevel(snap);
+  document.getElementById('level-name-input').value = lvl.name;
+  document.getElementById('world-select').value = lvl.world;
+  buildLevel3D(lvl); // sets activeLevel and rebuilds meshes
+  drawEditorWires();
+  updateEditorSlicing();
+  renderVerticalRuler();
+  updateUndoButton();
+  showMessage(`UNDO — ${undoStack.length} STEP${undoStack.length === 1 ? '' : 'S'} LEFT`, 1);
+}
+
+function updateUndoButton() {
+  const btn = document.getElementById('btn-undo');
+  if (btn) btn.disabled = undoStack.length === 0;
+}
+
 function enterEditMode() {
   if (isEditMode) return;
   isEditMode = true;
+  undoStack = [];
+  updateUndoButton();
   document.getElementById('editor-ui').style.display = 'block';
   document.getElementById('hud').style.display = 'none';
   document.getElementById('controls-hint').style.display = 'none';
@@ -2010,6 +2046,7 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (isEditMode && !isPlaytesting) {
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); editorUndo(); return; }
     // Tool hotkeys: 1-9 and 0 pick the first ten tools, X = eraser, L = linker
     const digit = e.code.match(/^Digit(\d)$/);
     if (digit) {
@@ -2034,17 +2071,8 @@ window.addEventListener('keydown', (e) => {
       if (linkerSourceKey) { linkerSourceKey = null; showMessage('LINK CANCELLED', 1); }
       return;
     }
-    // Editor Camera pan keys
-    const moveSpeed = 8;
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
-    const left = new THREE.Vector3(-forward.z, 0, forward.x);
-    if (e.code === 'KeyW' || e.code === 'ArrowUp') editorCameraTarget.addScaledVector(forward, 1);
-    if (e.code === 'KeyS' || e.code === 'ArrowDown') editorCameraTarget.addScaledVector(forward, -1);
-    if (e.code === 'KeyA' || e.code === 'ArrowLeft') editorCameraTarget.addScaledVector(left, 1);
-    if (e.code === 'KeyD' || e.code === 'ArrowRight') editorCameraTarget.addScaledVector(left, -1);
-    if (e.code === 'KeyQ') editorCameraYaw -= 0.15;
-    if (e.code === 'KeyE') editorCameraYaw += 0.15;
+    // Camera pan (WASD/arrows) and rotate (Q/E) are applied continuously in the
+    // render loop from keysPressed, so holding a key keeps moving smoothly.
     if (e.code === 'KeyR') { e.preventDefault(); adjustEditHeight(1); }
     if (e.code === 'KeyF') { e.preventDefault(); adjustEditHeight(-1); }
     return;
@@ -2091,6 +2119,8 @@ document.querySelectorAll('.ctrl-btn').forEach(btn => {
 renderer.domElement.addEventListener('mousedown', (e) => {
   if (!isEditMode || isPlaytesting) return;
   if (e.button === 0) {
+    // Snapshot once per click / paint-stroke (skip pure linker source-select).
+    if (!(selectedTool === 'linker' && linkerSourceKey === null)) pushUndoSnapshot();
     // Left click edit block
     if (selectedTool !== 'linker') {
       isPainting = true;
@@ -2267,10 +2297,12 @@ document.getElementById('btn-toggle-slice').addEventListener('click', () => {
 
 document.getElementById('btn-playtest').addEventListener('click', enterPlaytestMode);
 document.getElementById('btn-editor-exit').addEventListener('click', exitEditMode);
+document.getElementById('btn-undo').addEventListener('click', () => { audio.init(); editorUndo(); });
 
 document.getElementById('btn-demo-level').addEventListener('click', () => {
   audio.init();
   if (confirm("Load the '★ Element Showcase' demo level? This will overwrite your current design.")) {
+    pushUndoSnapshot();
     loadDemoLevel();
     adjustEditHeight(-editY); // reset editing height to 0
   }
@@ -2279,6 +2311,7 @@ document.getElementById('btn-demo-level').addEventListener('click', () => {
 document.getElementById('btn-ai-generate').addEventListener('click', () => {
   audio.init();
   if (confirm("Generate a complex 3D AI Labyrinth? This will overwrite your current design.")) {
+    pushUndoSnapshot();
     const lvl = generateAILabyrinth();
     activeLevel = lvl;
     document.getElementById('level-name-input').value = lvl.name;
@@ -2292,6 +2325,7 @@ document.getElementById('btn-ai-generate').addEventListener('click', () => {
 
 document.getElementById('btn-clear-grid').addEventListener('click', () => {
   if (confirm("Clear all blocks in this level?")) {
+    pushUndoSnapshot();
     activeLevel.blocks.clear();
     activeLevel.prisms.clear();
     activeLevel.links = [];
@@ -2400,6 +2434,7 @@ document.getElementById('btn-modal-load').addEventListener('click', () => {
   try {
     const jsonStr = document.getElementById('modal-textarea').value;
     const lvl = deserializeLevel(jsonStr);
+    if (isEditMode && !isPlaytesting) pushUndoSnapshot();
     activeLevel = lvl;
     document.getElementById('level-name-input').value = lvl.name;
     document.getElementById('world-select').value = lvl.world;
@@ -2554,6 +2589,22 @@ function animate(timestamp) {
     }
 
   } else {
+    // Continuous camera pan/rotate while keys are held (frame-rate independent).
+    const ae = document.activeElement;
+    const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT');
+    if (!typing) {
+      const panSpeed = 14, rotSpeed = 2.2;
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+      const lft = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      if (keysPressed['KeyW'] || keysPressed['ArrowUp'])    editorCameraTarget.addScaledVector(fwd,  panSpeed * dt);
+      if (keysPressed['KeyS'] || keysPressed['ArrowDown'])  editorCameraTarget.addScaledVector(fwd, -panSpeed * dt);
+      if (keysPressed['KeyA'] || keysPressed['ArrowLeft'])  editorCameraTarget.addScaledVector(lft,  panSpeed * dt);
+      if (keysPressed['KeyD'] || keysPressed['ArrowRight']) editorCameraTarget.addScaledVector(lft, -panSpeed * dt);
+      if (keysPressed['KeyQ']) editorCameraYaw -= rotSpeed * dt;
+      if (keysPressed['KeyE']) editorCameraYaw += rotSpeed * dt;
+    }
+
     // Level Editor camera orbits
     const targetCamPos = new THREE.Vector3(
       editorCameraTarget.x + Math.sin(editorCameraYaw) * Math.cos(editorCameraPitch) * editorCameraZoom,
