@@ -1,1075 +1,20 @@
-<!--
-  🟧 GOOSE — 3D Puzzle-Platformer & Level Editor
-  Generative audio, 3D grid heights, climbing, falling, mini-cube, moving platforms, and Minecraft-style 3D Level Editor.
--->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GOOSE — 3D & Level Editor</title>
-<style>
-  :root {
-    --bg: #0a0a0f; --surface: #14141f; --text: #e0e0e0;
-    --accent: #ff5500; --accent2: #00ccff; --gold: #ffcc00; --danger: #ff3355;
-    --green: #00ff88; --purple: #bb66ff; --ice: #88ddff;
-  }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body {
-    background: var(--bg); overflow: hidden;
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    user-select: none; -webkit-user-select: none;
-    -webkit-tap-highlight-color: transparent;
-    height: 100dvh; width: 100dvw;
-  }
-  #canvas-container { position:fixed; inset:0; z-index:1; }
-  canvas { display:block; }
-
-  #hud { position:fixed; z-index:10; pointer-events:none; inset:0;
-    display:flex; flex-direction:column; justify-content:space-between; }
-  #top-bar { display:flex; justify-content:space-between; align-items:flex-start;
-    padding:20px 28px; }
-  #level-info { display:flex; flex-direction:column; gap:1px; }
-  #world-name { font-size:11px; letter-spacing:0.28em; text-transform:uppercase;
-    color:var(--accent2); opacity:0.7; font-weight:500; }
-  #level-name { font-size:13px; letter-spacing:0.2em; text-transform:uppercase;
-    color:var(--text); opacity:0.9; font-weight:400; }
-  #level-number { font-size:38px; font-weight:200; color:var(--text);
-    letter-spacing:-0.02em; line-height:1; }
-  #score-box { text-align:right; display:flex; flex-direction:column; gap:8px; }
-  #prism-display { display:flex; flex-direction:column; align-items:flex-end; }
-  #prism-count { font-size:30px; font-weight:200; color:var(--gold); letter-spacing:-0.02em; }
-  #prism-label { font-size:10px; letter-spacing:0.2em; text-transform:uppercase;
-    color:var(--text); opacity:0.5; }
-  #stats-row { display:flex; gap:20px; font-size:12px; color:var(--text); opacity:0.6;
-    letter-spacing:0.08em; }
-  #combo-display { display:flex; flex-direction:column; align-items:flex-end; }
-  #combo-count { font-size:28px; font-weight:300; color:var(--accent);
-    opacity:0; transition:opacity 0.2s; }
-  #combo-count.active { opacity:1; }
-  #combo-label { font-size:10px; text-transform:uppercase; letter-spacing:0.15em;
-    color:var(--accent); opacity:0; transition:opacity 0.2s; }
-  #combo-label.active { opacity:0.7; }
-
-  #bottom-bar { display:flex; justify-content:center; padding:20px 28px 28px; }
-  #message { font-size:15px; font-weight:300; letter-spacing:0.1em; color:var(--text);
-    opacity:0; transition:opacity 0.3s; text-align:center; text-shadow:0 0 40px var(--accent2); }
-  #message.visible { opacity:0.9; }
-
-  #controls-hint { position:fixed; bottom:100px; left:50%; transform:translateX(-50%);
-    z-index:10; pointer-events:none; display:flex; gap:10px; opacity:0.45; }
-  .key { width:34px; height:34px; border:1px solid rgba(255,255,255,0.2);
-    border-radius:6px; display:flex; align-items:center; justify-content:center;
-    color:rgba(255,255,255,0.5); font-size:13px; }
-  .key.space { width:auto; padding:0 12px; font-size:10px; letter-spacing:0.1em; }
-
-  #mobile-controls { position:fixed; bottom:28px; right:28px; z-index:20;
-    display:none; grid-template-areas:'. up .' 'left . right' '. down .';
-    gap:6px; }
-  .ctrl-btn { width:48px; height:48px; border-radius:12px; border:1px solid rgba(255,255,255,0.15);
-    background:rgba(20,20,35,0.7); color:rgba(255,255,255,0.6); font-size:18px;
-    cursor:pointer; -webkit-tap-highlight-color:transparent; backdrop-filter:blur(8px); }
-  .ctrl-btn:active { background:rgba(255,100,0,0.3); border-color:var(--accent); }
-  .ctrl-btn.up    { grid-area:up; }
-  .ctrl-btn.left  { grid-area:left; }
-  .ctrl-btn.right { grid-area:right; }
-  .ctrl-btn.down  { grid-area:down; }
-
-  @media (pointer:coarse) { #mobile-controls { display:grid; } #controls-hint { display:none; } }
-
-  #fall-flash { position:fixed; inset:0; z-index:25; pointer-events:none;
-    background:radial-gradient(circle, var(--danger) 0%, transparent 60%);
-    opacity:0; transition:opacity 0.1s; }
-  #fall-flash.active { opacity:0.35; }
-
-  #complete-overlay, #world-overlay {
-    position:fixed; inset:0; z-index:30; pointer-events:none;
-    display:flex; align-items:center; justify-content:center;
-    opacity:0; transition:opacity 0.4s; }
-  #complete-overlay { flex-direction:column; gap:12px; }
-  #complete-text, #world-text { font-size:36px; font-weight:100; letter-spacing:0.2em;
-    color:var(--text); text-shadow:0 0 80px var(--accent2); text-align:center; }
-  #stars-display { display:flex; gap:8px; margin-top:4px; }
-  .star { font-size:28px; opacity:0.2; transition:opacity 0.5s; }
-  .star.earned { opacity:1; color:var(--gold); }
-  #complete-overlay.show, #world-overlay.show { opacity:1; }
-  #world-overlay { background:rgba(0,0,0,0.7); }
-  #world-subtitle { font-size:16px; letter-spacing:0.2em; color:var(--text); opacity:0.6; }
-
-  /* ═══════════════════════════════════════════════════════════
-     HUD / BUTTON UPGRADES
-     ═══════════════════════════════════════════════════════════ */
-  .hud-btn {
-    background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15);
-    color: var(--text); padding: 8px 16px; border-radius: 8px; font-size: 11px;
-    letter-spacing: 0.15em; text-transform: uppercase; cursor: pointer;
-    transition: all 0.2s; backdrop-filter: blur(8px);
-  }
-  .hud-btn:hover {
-    background: var(--accent2); color: #000; border-color: var(--accent2);
-    box-shadow: 0 0 15px rgba(0, 204, 255, 0.4);
-  }
-
-  /* ═══════════════════════════════════════════════════════════
-     EDITOR UI CSS (GLASSMORPHISM PANELS)
-     ═══════════════════════════════════════════════════════════ */
-  #editor-toolbox {
-    position: fixed; left: 20px; top: 100px; bottom: 100px; width: 175px;
-    background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px;
-    z-index: 100; padding: 16px; display: flex; flex-direction: column; gap: 10px;
-    box-shadow: 0 15px 30px rgba(0,0,0,0.5); overflow-y: auto;
-  }
-  .panel-header {
-    font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase;
-    color: var(--accent2); font-weight: bold; border-bottom: 1px solid rgba(255,255,255,0.1);
-    padding-bottom: 8px; margin-bottom: 4px; text-align: center;
-  }
-  .tool-section-title {
-    font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase;
-    color: var(--text); opacity: 0.5; margin-top: 6px; font-weight: 600;
-  }
-  .tool-grid {
-    display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;
-  }
-  .tool-btn {
-    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 8px; color: var(--text); font-size: 9px; padding: 8px 4px;
-    cursor: pointer; display: flex; flex-direction: column; align-items: center;
-    gap: 6px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.05em;
-  }
-  .tool-btn:hover {
-    background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2);
-  }
-  .tool-btn.active {
-    background: rgba(0, 204, 255, 0.15); border-color: var(--accent2);
-    box-shadow: 0 0 10px rgba(0, 204, 255, 0.25);
-  }
-  .tool-icon {
-    width: 20px; height: 20px; display: block; border-radius: 3px;
-  }
-  .tool-icon-txt {
-    font-size: 16px; line-height: 20px; height: 20px;
-  }
-  #editor-top-bar {
-    position: fixed; top: 20px; left: 20px; right: 20px; height: 60px;
-    background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px;
-    z-index: 100; display: flex; align-items: center; justify-content: space-between;
-    padding: 0 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.4);
-  }
-  .editor-title {
-    font-size: 14px; letter-spacing: 0.25em; font-weight: 200; color: var(--text);
-  }
-  .editor-input {
-    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 6px; color: var(--text); padding: 6px 12px; font-size: 12px;
-    width: 150px; outline: none;
-  }
-  .editor-select {
-    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 6px; color: var(--text); padding: 6px 12px; font-size: 12px;
-    cursor: pointer; outline: none;
-  }
-  .editor-btn {
-    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 6px; color: var(--text); padding: 8px 14px; font-size: 11px;
-    cursor: pointer; letter-spacing: 0.08em; text-transform: uppercase; transition: all 0.2s;
-  }
-  .editor-btn:hover {
-    background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3);
-  }
-  .editor-btn.success {
-    background: rgba(0, 255, 136, 0.1); border-color: var(--green); color: var(--green);
-  }
-  .editor-btn.success:hover {
-    background: var(--green); color: #000; box-shadow: 0 0 15px rgba(0,255,136,0.4);
-  }
-  .editor-btn.danger {
-    background: rgba(255, 51, 85, 0.1); border-color: var(--danger); color: var(--danger);
-  }
-  .editor-btn.danger:hover {
-    background: var(--danger); color: #fff; box-shadow: 0 0 15px rgba(255,51,85,0.4);
-  }
-  #editor-bottom-bar {
-    position: fixed; bottom: 20px; left: 20px; right: 20px; height: 60px;
-    background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px;
-    z-index: 100; display: flex; align-items: center; justify-content: space-between;
-    padding: 0 20px; box-shadow: 0 -10px 25px rgba(0,0,0,0.4);
-  }
-  .height-btn {
-    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
-    color: var(--text); border-radius: 4px; width: 26px; height: 26px;
-    font-size: 11px; cursor: pointer; display: inline-flex; align-items: center;
-    justify-content: center; transition: all 0.1s;
-  }
-  .height-btn:active {
-    background: var(--accent2); color: #000;
-  }
-  #editor-library-panel {
-    position: fixed; right: 20px; top: 100px; bottom: 100px; width: 220px;
-    background: rgba(15, 15, 25, 0.85); backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px;
-    z-index: 101; padding: 16px; display: flex; flex-direction: column; gap: 12px;
-    box-shadow: -10px 15px 30px rgba(0,0,0,0.5);
-  }
-  .levels-list {
-    flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
-  }
-  .library-item {
-    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 6px; color: var(--text); padding: 8px 10px; font-size: 11px;
-    text-align: left; cursor: pointer; display: flex; justify-content: space-between;
-    align-items: center; transition: all 0.1s;
-  }
-  .library-item:hover {
-    background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2);
-  }
-  .library-item .delete-btn {
-    background: none; border: none; color: var(--danger); font-size: 14px;
-    cursor: pointer; opacity: 0.6; padding: 2px 6px;
-  }
-  .library-item .delete-btn:hover {
-    opacity: 1;
-  }
-  .modal-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200;
-    display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);
-  }
-  .modal-content {
-    background: rgba(20, 20, 31, 0.9); border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 16px; width: 480px; max-width: 90%; padding: 24px;
-    box-shadow: 0 25px 50px rgba(0,0,0,0.6); display: flex; flex-direction: column;
-  }
-  .modal-header {
-    font-size: 16px; letter-spacing: 0.15em; color: var(--text);
-    margin-bottom: 16px; font-weight: bold; border-bottom: 1px solid rgba(255,255,255,0.1);
-    padding-bottom: 10px;
-  }
-  .editor-textarea {
-    background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 8px; color: #aaffaa; font-family: monospace; font-size: 11px;
-    height: 200px; resize: none; padding: 12px; outline: none; width: 100%;
-  }
-
-  /* Mini Cube Duration HUD bar */
-  #mini-hud-bar {
-    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
-    width: 200px; height: 6px; background: rgba(255,255,255,0.1);
-    border-radius: 3px; z-index: 10; display: none; overflow: hidden;
-    border: 1px solid rgba(255,255,255,0.05);
-  }
-  #mini-hud-fill {
-    width: 100%; height: 100%; background: linear-gradient(90deg, #00ccff, #00ffaa);
-    transition: width 0.1s linear;
-  }
-
-  /* editor instructions box */
-  #editor-instructions {
-    position: fixed; right: 20px; top: 100px; width: 220px;
-    background: rgba(15, 15, 25, 0.7); backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
-    z-index: 99; padding: 14px; color: var(--text); font-size: 10px;
-    line-height: 1.6; display: flex; flex-direction: column; gap: 6px;
-    box-shadow: 0 10px 20px rgba(0,0,0,0.3); pointer-events: none;
-  }
-  .instruction-row {
-    display: flex; justify-content: space-between; border-bottom: 1px dashed rgba(255,255,255,0.05);
-    padding-bottom: 4px;
-  }
-  .instruction-row span:first-child {
-    font-weight: bold; color: var(--accent2);
-  }
-
-  /* editor height ruler */
-  #editor-height-ruler {
-    position: fixed; right: 260px; top: 100px; bottom: 100px; width: 45px;
-    background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 22px;
-    z-index: 100; display: flex; flex-direction: column; align-items: center;
-    justify-content: space-between; padding: 12px 0; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-    color: var(--text); user-select: none;
-  }
-  .ruler-title {
-    font-size: 8px; letter-spacing: 0.1em; color: var(--accent2); font-weight: bold;
-    transform: rotate(-90deg); margin: 15px 0; white-space: nowrap;
-  }
-  .ruler-levels {
-    display: flex; flex-direction: column; gap: 4px; align-items: center; width: 100%;
-    overflow-y: auto; flex-grow: 1; padding: 5px 0;
-  }
-  .ruler-levels::-webkit-scrollbar { width: 0px; } /* hide scrollbar */
-  .ruler-level-btn {
-    width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.02); color: var(--text); font-size: 11px;
-    font-weight: 500; cursor: pointer; display: flex; align-items: center;
-    justify-content: center; transition: all 0.2s; flex-shrink: 0;
-  }
-  .ruler-level-btn:hover {
-    background: rgba(0, 204, 255, 0.1); border-color: var(--accent2);
-  }
-  .ruler-level-btn.active {
-    background: var(--accent2); color: #000; border-color: var(--accent2);
-    font-weight: bold; box-shadow: 0 0 12px rgba(0, 204, 255, 0.6);
-  }
-
-  /* editor hover tooltip */
-  #editor-tooltip {
-    position: fixed; pointer-events: none; background: rgba(10, 10, 15, 0.85);
-    border: 1px solid var(--accent2); color: white; padding: 6px 10px;
-    border-radius: 6px; font-size: 11px; z-index: 1000; display: none;
-    backdrop-filter: blur(8px); box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-    font-family: monospace; letter-spacing: 0.05em;
-  }
-  .tooltip-coord {
-    color: var(--gold); font-weight: bold; margin-left: 5px;
-  }
-  .tooltip-stacking {
-    color: var(--accent); font-weight: bold; font-size: 9px;
-    margin-left: 5px; text-transform: uppercase;
-  }
-</style>
-</head>
-<body>
-<div id="canvas-container"></div>
-
-<div id="hud">
-  <div id="top-bar">
-    <div id="level-info">
-      <span id="world-name">WORLD 1</span>
-      <span id="level-name">Level</span>
-      <span id="level-number">1</span>
-    </div>
-    <div style="display:flex; gap:12px; pointer-events:auto; align-items:center;">
-      <button id="btn-play-load" class="hud-btn">Load Level</button>
-      <button id="btn-editor-toggle" class="hud-btn">EDITOR</button>
-      <div id="score-box">
-        <div id="prism-display">
-          <div id="prism-count">0</div>
-          <div id="prism-label">Prisms</div>
-        </div>
-        <div id="combo-display">
-          <div id="combo-count">x1</div>
-          <div id="combo-label">Combo</div>
-        </div>
-        <div id="stats-row">
-          <span id="move-counter">0 moves</span>
-          <span id="timer-display">0:00</span>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div id="bottom-bar"><div id="message"></div></div>
-</div>
-
-<!-- Mini Cube powerup HUD -->
-<div id="mini-hud-bar"><div id="mini-hud-fill"></div></div>
-
-<!-- Editor UI Overlay -->
-<div id="editor-ui" style="display: none;">
-  <!-- Left Panel: Toolbox -->
-  <div id="editor-toolbox">
-    <div class="panel-header">TOOLBOX</div>
-    <div class="tool-section-title">Blocks</div>
-    <div class="tool-grid">
-      <button class="tool-btn active" data-tool="normal" title="Normal Block">
-        <span class="tool-icon" style="background:#2a2a38; border:1px solid #555577;"></span>
-        Normal
-      </button>
-      <button class="tool-btn" data-tool="fragile" title="Fragile Block">
-        <span class="tool-icon" style="background:#442222; border:1px solid #883333;"></span>
-        Fragile
-      </button>
-      <button class="tool-btn" data-tool="ice" title="Ice Block">
-        <span class="tool-icon" style="background:#335566; border:1px solid #6699aa;"></span>
-        Ice
-      </button>
-      <button class="tool-btn" data-tool="switch" title="Switch Block">
-        <span class="tool-icon" style="background:#333344; border:1px solid #6677cc;"></span>
-        Switch
-      </button>
-      <button class="tool-btn" data-tool="bridge" title="Bridge Platform">
-        <span class="tool-icon" style="background:#334455; border:1px solid #335577;"></span>
-        Bridge
-      </button>
-      <button class="tool-btn" data-tool="teleporter" title="Teleporter Portal">
-        <span class="tool-icon" style="background:#2a2244; border:1px solid #8855dd;"></span>
-        Portal
-      </button>
-      <button class="tool-btn" data-tool="moving" title="Moving Platform">
-        <span class="tool-icon" style="background:#445544; border:1px solid #44aa55;"></span>
-        Moving
-      </button>
-      <button class="tool-btn" data-tool="pushable" title="Pushable Crate">
-        <span class="tool-icon" style="background:#8b5a2b; border:1px solid #ffaa44;"></span>
-        Crate
-      </button>
-      <button class="tool-btn" data-tool="pressureplate" title="Momentary Pressure Plate">
-        <span class="tool-icon" style="background:#2244aa; border:1px solid #3366ff;"></span>
-        Plate
-      </button>
-      <button class="tool-btn" data-tool="danger" title="Spikes/Laser Hazard">
-        <span class="tool-icon" style="background:#221111; border:1px solid #ff3355;"></span>
-        Hazard
-      </button>
-      <button class="tool-btn" data-tool="shaker" title="Collapsing Shaker Block">
-        <span class="tool-icon" style="background:#554444; border:1px solid #887777;"></span>
-        Shaker
-      </button>
-      <button class="tool-btn" data-tool="booster" title="Booster Speed Pad">
-        <span class="tool-icon" style="background:#223322; border:1px solid #ffcc00;"></span>
-        Booster
-      </button>
-    </div>
-    
-    <div class="tool-section-title">Items</div>
-    <div class="tool-grid">
-      <button class="tool-btn" data-tool="start" title="Spawn Position">
-        <span class="tool-icon" style="background:#ff6600; border-radius:50%;"></span>
-        Start
-      </button>
-      <button class="tool-btn" data-tool="exit" title="Goal Portal">
-        <span class="tool-icon" style="background:#00ffaa; border-radius:50%;"></span>
-        Exit
-      </button>
-      <button class="tool-btn" data-tool="prism" title="Prism Collectible">
-        <span class="tool-icon" style="background:#ffdd44; clip-path:polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);"></span>
-        Prism
-      </button>
-      <button class="tool-btn" data-tool="miniprism" title="Mini-Prism Powerup">
-        <span class="tool-icon" style="background:#00ccff; clip-path:polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); scale:0.7;"></span>
-        Mini-P
-      </button>
-    </div>
-    
-    <div class="tool-section-title">Utilities</div>
-    <div class="tool-grid">
-      <button class="tool-btn" data-tool="linker" title="Link switches to bridges/platforms, or link teleporters">
-        <span class="tool-icon-txt">🔗</span>
-        Linker
-      </button>
-      <button class="tool-btn" data-tool="eraser" title="Erase blocks or items">
-        <span class="tool-icon-txt">❌</span>
-        Erase
-      </button>
-    </div>
-  </div>
-  
-  <!-- Top Bar: Level actions -->
-  <div id="editor-top-bar">
-    <div style="display:flex; align-items:center; gap:12px;">
-      <span class="editor-title">LEVEL DESIGNER</span>
-      <input type="text" id="level-name-input" value="My Custom Level" class="editor-input">
-      <select id="world-select" class="editor-select">
-        <option value="0">Theme: Foundations</option>
-        <option value="1">Theme: Fractures</option>
-        <option value="2">Theme: Mechanisms</option>
-        <option value="3">Theme: Conduits</option>
-        <option value="4">Theme: Mastery</option>
-      </select>
-    </div>
-    
-    <div style="display:flex; gap:8px;">
-      <button id="btn-demo-level" class="editor-btn success" title="Load the demo level that showcases every gameplay element">Demo</button>
-      <button id="btn-ai-generate" class="editor-btn success" title="Generate an AI 3D Labyrinth">AI Gen</button>
-      <button id="btn-toggle-slice" class="editor-btn success" title="Toggle layer slicing (hides blocks above current height)">Slice: ON</button>
-      <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
-      <button id="btn-save-local" class="editor-btn">Save</button>
-      <button id="btn-load-local" class="editor-btn">Load</button>
-      <button id="btn-export-level" class="editor-btn">Export</button>
-      <button id="btn-import-level" class="editor-btn">Import</button>
-    </div>
-  </div>
-  
-  <!-- Bottom Bar: Controls & Height -->
-  <div id="editor-bottom-bar">
-    <div style="display:flex; align-items:center; gap:12px;">
-      <span>EDITING HEIGHT (Y):</span>
-      <button id="btn-height-down" class="height-btn">▼</button>
-      <span id="height-display" style="font-size:16px; font-weight:bold; color:var(--accent2); width:20px; text-align:center;">0</span>
-      <button id="btn-height-up" class="height-btn">▲</button>
-      <span style="opacity:0.5; font-size:11px; margin-left:10px;">(Scroll to change)</span>
-    </div>
-    
-    <div style="display:flex; gap:10px;">
-      <button id="btn-playtest" class="editor-btn success">PLAYTEST</button>
-      <button id="btn-editor-exit" class="editor-btn">EXIT</button>
-    </div>
-  </div>
-
-  <!-- Vertical Height Ruler -->
-  <div id="editor-height-ruler">
-    <button class="height-btn" id="ruler-up">▲</button>
-    <div class="ruler-title">HEIGHT LAYER</div>
-    <div id="ruler-levels-list" class="ruler-levels"></div>
-    <button class="height-btn" id="ruler-down">▼</button>
-  </div>
-
-  <!-- Cursor Tooltip -->
-  <div id="editor-tooltip">Normal Block <span class="tooltip-coord">(0, 0, 0)</span></div>
-  
-  <!-- Floating Instructions Guide -->
-  <div id="editor-instructions">
-    <div class="panel-header" style="border:none; margin:0; padding:0;">Controls Guide</div>
-    <div class="instruction-row"><span>Left Click</span><span>Place / Paint</span></div>
-    <div class="instruction-row"><span>Right Click</span><span>Erase (Tap)</span></div>
-    <div class="instruction-row"><span>Right Drag</span><span>Rotate View</span></div>
-    <div class="instruction-row"><span>WASD / Q E</span><span>Pan / Rotate</span></div>
-    <div class="instruction-row"><span>R / F</span><span>Height Up / Down</span></div>
-    <div class="instruction-row"><span>Shift+Wheel</span><span>Height · Wheel: Zoom</span></div>
-    <div class="instruction-row"><span>1-0, X, L</span><span>Tool Hotkeys</span></div>
-    <div class="instruction-row"><span>Linker</span><span>Source ➜ Target (ESC)</span></div>
-    <div class="instruction-row"><span>Moving</span><span>Place, then Link dest.</span></div>
-  </div>
-
-</div>
-
-<!-- Right Panel: Load Library list (Shared) -->
-<div id="editor-library-panel" style="display:none; z-index: 250;">
-  <div class="panel-header">LOAD LEVEL</div>
-  <div id="custom-levels-list" class="levels-list"></div>
-  <div style="display:flex; gap:8px; margin-top:12px;">
-    <button id="btn-library-upload" class="editor-btn success" style="flex-grow:1;">Load File</button>
-    <button id="btn-close-library" class="editor-btn" style="flex-grow:1;">Close</button>
-  </div>
-</div>
-
-<!-- Export/Import Modal (Shared) -->
-<div id="export-import-modal" class="modal-overlay" style="display:none; z-index: 260;">
-  <div class="modal-content">
-    <div class="modal-header" id="modal-title">EXPORT LEVEL</div>
-    <textarea id="modal-textarea" class="editor-textarea"></textarea>
-    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
-      <button id="btn-modal-copy" class="editor-btn success">Copy</button>
-      <button id="btn-modal-download" class="editor-btn success" style="display:none;">Save File</button>
-      <button id="btn-modal-upload" class="editor-btn success" style="display:none;">Load File</button>
-      <button id="btn-modal-load" class="editor-btn success" style="display:none;">Load</button>
-      <button id="btn-modal-close" class="editor-btn">Close</button>
-    </div>
-    <input type="file" id="import-file-input" accept=".json" style="display:none;">
-  </div>
-</div>
-
-<div id="controls-hint">
-  <div class="key">←</div><div class="key">↑</div><div class="key">↓</div><div class="key">→</div>
-  <div class="key space">WASD</div>
-  <div class="key space">R</div>
-</div>
-
-<div id="mobile-controls">
-  <button class="ctrl-btn up" data-dir="up">▲</button>
-  <button class="ctrl-btn left" data-dir="left">◀</button>
-  <button class="ctrl-btn right" data-dir="right">▶</button>
-  <button class="ctrl-btn down" data-dir="down">▼</button>
-</div>
-
-<div id="fall-flash"></div>
-
-<div id="complete-overlay">
-  <div id="complete-text"></div>
-  <div id="stars-display">
-    <span class="star" id="star1">★</span>
-    <span class="star" id="star2">★</span>
-    <span class="star" id="star3">★</span>
-  </div>
-</div>
-
-<div id="world-overlay">
-  <div>
-    <div id="world-text"></div>
-    <div id="world-subtitle"></div>
-  </div>
-</div>
-
-<script type="importmap">
-{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
-</script>
-
-<script type="module">
 import * as THREE from 'three';
-
-/* ═══════════════════════════════════════════════════════════
-   GENERATIVE AUDIO ENGINE (Web Audio API)
-   ═══════════════════════════════════════════════════════════ */
-class AudioEngine {
-  constructor() {
-    this.ctx = null;
-    this.master = null;
-    this.ready = false;
-    this._ambientOscs = [];
-    this._balanceNodes = null;
-  }
-
-  init() {
-    if (this.ready) return;
-    try {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      this.master = this.ctx.createGain();
-      this.master.gain.value = 0.5;
-      this.master.connect(this.ctx.destination);
-      this.ready = true;
-    } catch(e) { /* no audio */ }
-  }
-
-  _now() { return this.ctx.currentTime; }
-
-  playRoll() {
-    if (!this.ready) return;
-    const t = this._now();
-    const len = this.ctx.sampleRate * 0.05;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
-    const noise = this.ctx.createBufferSource(); noise.buffer = buf;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'bandpass'; filt.frequency.value = 700 + Math.random()*500; filt.Q.value = 0.6;
-    const ng = this.ctx.createGain();
-    ng.gain.setValueAtTime(0.2, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t+0.05);
-    noise.connect(filt); filt.connect(ng); ng.connect(this.master);
-    noise.start(t); noise.stop(t+0.06);
-
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.value = 85 + Math.random()*35;
-    const og = this.ctx.createGain();
-    og.gain.setValueAtTime(0.4, t);
-    og.gain.exponentialRampToValueAtTime(0.001, t+0.07);
-    osc.connect(og); og.connect(this.master);
-    osc.start(t); osc.stop(t+0.08);
-  }
-
-  playIce() {
-    if (!this.ready) return;
-    const t = this._now();
-    const len = this.ctx.sampleRate * 0.08;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
-    const noise = this.ctx.createBufferSource(); noise.buffer = buf;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'highpass'; filt.frequency.value = 2000;
-    const ng = this.ctx.createGain();
-    ng.gain.setValueAtTime(0.12, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t+0.08);
-    noise.connect(filt); filt.connect(ng); ng.connect(this.master);
-    noise.start(t); noise.stop(t+0.09);
-  }
-
-  playBalanceStart() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = 200;
-    const lfo = this.ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 7;
-    const lfoG = this.ctx.createGain(); lfoG.gain.value = 60;
-    lfo.connect(lfoG); lfoG.connect(osc.frequency);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.12, t+0.15);
-    gain.gain.linearRampToValueAtTime(0.22, t+0.5);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); lfo.start(t);
-    this._balanceNodes = { osc, lfo, gain };
-  }
-
-  playBalanceStop() {
-    if (!this._balanceNodes) return;
-    const t = this._now();
-    const { osc, lfo, gain } = this._balanceNodes;
-    gain.gain.linearRampToValueAtTime(0, t+0.1);
-    osc.stop(t+0.15); lfo.stop(t+0.15);
-    this._balanceNodes = null;
-  }
-
-  playFall() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(400, t);
-    osc.frequency.exponentialRampToValueAtTime(60, t+0.45);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.5);
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'lowpass'; filt.frequency.setValueAtTime(1500, t);
-    filt.frequency.exponentialRampToValueAtTime(200, t+0.4);
-    osc.connect(filt); filt.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.55);
-    this.playBalanceStop();
-  }
-
-  playLand() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'triangle';
-    osc.frequency.setValueAtTime(120, t);
-    osc.frequency.exponentialRampToValueAtTime(35, t+0.18);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.35, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.2);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.22);
-  }
-
-  playShrink() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.setValueAtTime(350, t);
-    osc.frequency.exponentialRampToValueAtTime(1000, t+0.2);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.22);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.24);
-  }
-
-  playGrow() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.setValueAtTime(800, t);
-    osc.frequency.exponentialRampToValueAtTime(250, t+0.25);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.27);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.3);
-  }
-
-  playCollect() {
-    if (!this.ready) return;
-    const t = this._now();
-    const freqs = [880, 1108, 1320];
-    freqs.forEach((f,i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.18, t + i*0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.04 + 0.35);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t + i*0.04); osc.stop(t + i*0.04 + 0.4);
-    });
-  }
-
-  playSwitch() {
-    if (!this.ready) return;
-    const t = this._now();
-    [600, 900].forEach((f,i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'square'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.1, t + i*0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.04 + 0.1);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t + i*0.04); osc.stop(t + i*0.04 + 0.12);
-    });
-  }
-
-  playTeleport() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.setValueAtTime(200, t);
-    osc.frequency.exponentialRampToValueAtTime(1200, t+0.15);
-    osc.frequency.exponentialRampToValueAtTime(800, t+0.25);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.2, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.3);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.35);
-  }
-
-  playBreak() {
-    if (!this.ready) return;
-    const t = this._now();
-    const len = this.ctx.sampleRate * 0.12;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
-    const noise = this.ctx.createBufferSource(); noise.buffer = buf;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'lowpass'; filt.frequency.setValueAtTime(800, t);
-    filt.frequency.exponentialRampToValueAtTime(100, t+0.12);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.15);
-    noise.connect(filt); filt.connect(gain); gain.connect(this.master);
-    noise.start(t); noise.stop(t+0.16);
-  }
-
-  playRespawn() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'triangle';
-    osc.frequency.setValueAtTime(150, t);
-    osc.frequency.exponentialRampToValueAtTime(300, t+0.15);
-    osc.frequency.exponentialRampToValueAtTime(200, t+0.3);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.linearRampToValueAtTime(0, t+0.35);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.4);
-  }
-
-  playComplete() {
-    if (!this.ready) return;
-    const t = this._now();
-    const notes = [523, 659, 784, 1047];
-    notes.forEach((f,i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      const st = t + i*0.12;
-      gain.gain.setValueAtTime(0.02, st);
-      gain.gain.linearRampToValueAtTime(0.2, st+0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, st+0.7);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(st); osc.stop(st+0.75);
-    });
-  }
-
-  startAmbient(worldIdx) {
-    if (!this.ready) return;
-    this.stopAmbient();
-    const t = this._now();
-    const baseFreq = [55, 65, 73, 82, 98][worldIdx % 5];
-    [1, 1.005, 2, 2.01, 3, 3.005].forEach(ratio => {
-      const osc = this.ctx.createOscillator(); osc.type = 'sine';
-      osc.frequency.value = baseFreq * ratio;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.03, t+1);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t);
-      this._ambientOscs.push({ osc, gain });
-    });
-  }
-
-  stopAmbient() {
-    if (!this.ready) return;
-    const t = this._now();
-    this._ambientOscs.forEach(({ osc, gain }) => {
-      gain.gain.linearRampToValueAtTime(0, t+0.5);
-      osc.stop(t+0.6);
-    });
-    this._ambientOscs = [];
-  }
-}
+import { TILE_SIZE, CUBE_S, ROLL_DUR_NORMAL, ROLL_DUR_MINI, CAM_LERP, BALANCE_WINDOW, COMBO_TIMEOUT } from './constants.js';
+import { WORLDS, LEVELS, DEMO_LEVEL } from './levels-data.js';
+import { AudioEngine } from './audio.js';
+import {
+  renderer, scene, camera, underGlow,
+  matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
+  matCube, matPrism, matMiniPrism, matPrismGlow, matBridge, matSwitchPillar,
+  matCrate, matPressurePlate, matDanger, matShaker, matBooster,
+  geoTile, geoThinTile, geoCube, geoPrism, geoRing, geoPillar, geoTrail,
+  worldGroup, tilesGroup, prismsGroup, effectsGroup, bridgeGroup
+} from './scene.js';
+import { Level3D, MovingPlatform, convertTo3D, serializeLevel, deserializeLevel } from './level.js';
 
 const audio = new AudioEngine();
 
-/* ═══════════════════════════════════════════════════════════
-   CONSTANTS & MATERIALS
-   ═══════════════════════════════════════════════════════════ */
-const TILE_SIZE = 1.0, CUBE_S = 0.88;
-const ROLL_DUR_NORMAL = 0.13, ROLL_DUR_MINI = 0.08, CAM_LERP = 0.08;
-const BALANCE_WINDOW = 2.0;
-const COMBO_TIMEOUT = 0.6;
-
-const WORLDS = [
-  { name:'Foundations', color:'#ff6600', accent:'#ff8844', bg:'#0a0a16' },
-  { name:'Fractures',   color:'#ff4455', accent:'#ff6677', bg:'#0f0a0a' },
-  { name:'Mechanisms',  color:'#44aaff', accent:'#66ccff', bg:'#0a0f16' },
-  { name:'Conduits',    color:'#bb66ff', accent:'#cc88ff', bg:'#0f0a16' },
-  { name:'Mastery',     color:'#ffaa00', accent:'#ffcc44', bg:'#0f0f0a' },
-];
-
-/* ═══════════════════════════════════════════════════════════
-   PRE-MADE LEVELS (Converted dynamically at runtime)
-   ═══════════════════════════════════════════════════════════ */
-const LEVELS = [
-  // WORLD 1
-  { world:0, name:'First Steps',   par:6,  tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3]], prisms:[[2,0],[4,2]], start:[0,0], exit:[4,3] },
-  { world:0, name:'The Bend',      par:8,  tiles:[[0,0],[1,0],[2,0],[3,0],[0,1],[0,2],[0,3],[1,3],[2,3],[3,3]], prisms:[[3,0],[0,1],[3,3]], start:[0,0], exit:[3,3] },
-  { world:0, name:'Cross',         par:12, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[2,1],[2,2],[2,3],[2,4],[0,2],[4,2],[0,4],[4,4]], prisms:[[4,0],[0,2],[4,2],[0,4],[4,4]], start:[2,0], exit:[2,4] },
-  { world:0, name:'Loop',          par:14, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[5,1],[5,2],[4,2],[3,2],[2,2],[1,2],[0,2],[0,1]], prisms:[[5,0],[5,2],[0,2]], start:[0,0], exit:[0,1] },
-  // WORLD 2
-  { world:1, name:'Thin Ice',     par:8,  tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0]], fragile:[[2,0],[3,0],[4,0]], prisms:[[0,0],[6,0]], start:[0,0], exit:[6,0] },
-  { world:1, name:'Crumbling',    par:10, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[0,1],[1,1],[2,1],[3,1],[4,1],[0,2],[1,2],[2,2],[3,2],[4,2]], fragile:[[1,0],[2,0],[3,0],[1,1],[3,1],[1,2],[3,2]], prisms:[[4,0],[4,1],[4,2]], start:[0,0], exit:[0,2] },
-  { world:1, name:'Leap of Faith',par:10, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[0,1],[3,1],[5,1],[0,2],[1,2],[2,2],[3,2],[5,2]], fragile:[[2,0],[3,1],[1,2],[2,2]], prisms:[[4,0],[0,1],[3,2]], start:[0,0], exit:[5,2] },
-  { world:1, name:'Overhang',     par:11, tiles:[[0,0],[1,0],[2,0],[3,0],[2,1],[2,2],[2,3],[0,3],[1,3],[3,3],[4,3],[2,4]], fragile:[[2,1],[2,2],[1,3],[3,3]], prisms:[[3,0],[2,3],[2,4]], start:[0,0], exit:[4,3] },
-  // WORLD 3
-  { world:2, name:'Gateway',       par:9,  tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]], switches:{a:[1,0]}, bridges:{a:[[4,0],[5,0],[6,0]]}, prisms:[[7,0]], start:[0,0], exit:[7,0] },
-  { world:2, name:'Dual Bridge',   par:12, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[0,1],[4,1],[0,2],[4,2],[0,3],[1,3],[2,3],[3,3],[4,3]], switches:{a:[1,0],b:[3,0]}, bridges:{a:[[1,1],[2,1],[3,1]],b:[[1,2],[2,2],[3,2]]}, prisms:[[0,1],[4,2],[0,3],[4,3]], start:[0,0], exit:[2,3] },
-  { world:2, name:'Locked In',     par:10, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[0,1],[4,1],[0,2],[4,2],[0,3],[1,3],[2,3],[3,3],[4,3]], switches:{a:[2,0]}, bridges:{a:[[1,1],[2,1],[3,1],[1,2],[2,2],[3,2]]}, prisms:[[4,0],[0,1],[3,3]], start:[0,0], exit:[4,3] },
-  { world:2, name:'The Maze',      par:16, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[0,1],[5,1],[0,2],[5,2],[0,3],[1,3],[2,3],[3,3],[4,3],[5,3]], switches:{a:[4,0],b:[1,3]}, bridges:{a:[[1,1],[2,1],[3,1],[4,1]],b:[[1,2],[2,2],[3,2],[4,2]]}, prisms:[[5,0],[0,1],[5,1],[0,3],[5,3]], start:[0,0], exit:[3,3] },
-  // WORLD 4
-  { world:3, name:'Portal',        par:10, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0]], teleporters:{a:[[1,0],[6,0]]}, prisms:[[3,0],[7,0]], start:[0,0], exit:[7,0] },
-  { world:3, name:'Twin Gates',    par:12, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[0,1],[6,1],[0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2]], teleporters:{a:[[3,0],[3,2]],b:[[0,1],[6,1]]}, prisms:[[6,0],[0,2],[6,2]], start:[0,0], exit:[6,2] },
-  { world:3, name:'Nexus',         par:14, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[2,1],[2,3]], teleporters:{a:[[5,0],[5,2]],b:[[0,0],[0,2]]}, fragile:[[2,1],[2,3]], prisms:[[2,0],[3,0],[4,0],[2,2],[3,2],[4,2]], start:[1,0], exit:[1,2] },
-  { world:3, name:'Conduit',       par:18, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0],[0,2],[1,2],[2,2],[3,2],[4,2],[5,2],[6,2],[7,2],[8,2]], teleporters:{a:[[2,0],[8,2]],b:[[6,0],[0,2]],c:[[1,0],[3,2]]}, prisms:[[4,0],[8,0],[4,2],[8,2]], start:[0,0], exit:[5,2] },
-  // WORLD 5
-  { world:4, name:'Ice Slide',     par:7,  tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[8,0]], ice:[[2,0],[3,0],[4,0],[5,0],[6,0]], prisms:[[8,0]], start:[0,0], exit:[8,0] },
-  { world:4, name:'Gauntlet',      par:16, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[0,1],[5,1],[0,2],[5,2],[0,3],[1,3],[2,3],[3,3],[4,3],[5,3]], fragile:[[5,0],[5,1],[5,2]], ice:[[0,1],[0,2]], teleporters:{a:[[1,3],[5,0]]}, switches:{a:[4,3]}, bridges:{a:[[1,1],[2,1],[3,1],[4,1]]}, prisms:[[0,0],[5,3],[3,3]], start:[0,0], exit:[2,3] },
-  { world:4, name:'Frostburn',     par:15, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[0,1],[5,1],[0,2],[5,2],[0,3],[1,3],[2,3],[3,3],[4,3],[5,3]], ice:[[0,0],[5,0],[0,2],[5,2]], fragile:[[1,3],[2,3],[3,3],[4,3]], switches:{a:[2,0]}, bridges:{a:[[1,1],[2,1],[3,1],[4,1]]}, prisms:[[5,1],[0,3],[5,3]], start:[0,0], exit:[5,3] },
-  { world:4, name:'The Final Goose',par:20, tiles:[[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[6,0],[7,0],[7,1],[7,2],[7,3],[6,3],[5,3],[4,3],[3,3],[2,3],[1,3],[0,3],[0,2],[0,1]], fragile:[[3,0],[4,0],[5,0],[4,3],[3,3],[2,3]], ice:[[7,1],[7,2]], teleporters:{a:[[2,0],[1,3]]}, switches:{a:[7,0]}, bridges:{a:[[5,1],[5,2],[6,1],[6,2],[4,1],[3,1]]}, prisms:[[7,0],[7,3],[0,3],[0,0]], start:[0,0], exit:[0,1] },
-];
-
-/* ═══════════════════════════════════════════════════════════
-   BUILT-IN DEMO LEVEL — showcases every gameplay element once:
-   normal, fragile, ice, switch+bridge, climbing stairs, crate +
-   pressure plate gate, moving platform, shaker, danger, booster,
-   teleporter pair, mini-prism (wall climb + bridge squeeze), prisms.
-   ═══════════════════════════════════════════════════════════ */
-const DEMO_LEVEL = {
-  name: '★ Element Showcase',
-  world: 2,
-  par: 60,
-  start: [0, 0, 0],
-  exit: [44, 0, 8],
-  blocks: [
-    // 1) Basics
-    [0,0,0,'normal',{}],[1,0,0,'normal',{}],[2,0,0,'normal',{}],[3,0,0,'normal',{}],
-    // 2) Fragile crossing (breaks behind you)
-    [4,0,0,'fragile',{}],[5,0,0,'fragile',{}],
-    [6,0,0,'normal',{}],
-    // 3) Ice slide (auto-slides until solid ground)
-    [7,0,0,'ice',{}],[8,0,0,'ice',{}],[9,0,0,'ice',{}],[10,0,0,'ice',{}],
-    [11,0,0,'normal',{}],
-    // 4) Switch toggles the bridge gap
-    [12,0,0,'switch',{}],
-    [13,0,0,'bridge',{}],[14,0,0,'bridge',{}],
-    [15,0,0,'normal',{}],
-    // 5) Climbing stairs up to a plateau and back down
-    [16,0,0,'normal',{}],[16,1,0,'normal',{}],
-    [17,0,0,'normal',{}],[17,1,0,'normal',{}],[17,2,0,'normal',{}],
-    [18,0,0,'normal',{}],[18,1,0,'normal',{}],[18,2,0,'normal',{}],
-    [19,0,0,'normal',{}],[19,1,0,'normal',{}],
-    [20,0,0,'normal',{}],
-    // 6) Crate push onto pressure plate opens the gate bridges
-    [20,0,1,'normal',{}],[20,0,2,'normal',{}],[20,0,3,'normal',{}],
-    [20,0,4,'pressureplate',{}],
-    [20,1,2,'pushable',{}],
-    [21,0,3,'bridge',{}],[22,0,3,'bridge',{}],
-    [23,0,3,'normal',{}],
-    // 7) Moving platform ferry across the gap
-    [24,0,3,'moving',{ targetX:26, targetY:0, targetZ:3, speed:1.2 }],
-    [27,0,3,'normal',{}],
-    // 8) Shaker blocks (crumble!) with danger spikes alongside
-    [28,0,3,'shaker',{}],[29,0,3,'shaker',{}],
-    [28,0,2,'danger',{}],[29,0,2,'danger',{}],
-    [30,0,3,'normal',{}],
-    // 9) Booster speed pad
-    [31,0,3,'booster',{}],
-    [32,0,3,'normal',{}],[33,0,3,'normal',{}],[34,0,3,'normal',{}],[35,0,3,'normal',{}],
-    // 10) Teleporter pair to the mini-cube island
-    [36,0,3,'teleporter',{}],
-    [36,0,8,'teleporter',{}],
-    [37,0,8,'normal',{}],
-    // 11) Mini-cube wall climb (2-high wall, mini only)
-    [38,0,8,'normal',{}],[38,1,8,'normal',{}],[38,2,8,'normal',{}],
-    [39,0,8,'normal',{}],[39,1,8,'normal',{}],
-    [40,0,8,'normal',{}],
-    // 12) Mini-cube squeeze tunnel under bridges (roof blocks the big cube)
-    [41,0,8,'normal',{}],[41,1,8,'bridge',{}],[41,2,8,'normal',{}],
-    [42,0,8,'normal',{}],[42,1,8,'bridge',{}],[42,2,8,'normal',{}],
-    [43,0,8,'normal',{}],
-    // 13) Exit
-    [44,0,8,'normal',{}],
-  ],
-  prisms: [
-    [2,0,0,'prism'],[9,0,0,'prism'],[18,2,0,'prism'],[33,0,3,'prism'],[43,0,8,'prism'],
-    [37,0,8,'miniprism'],[40,0,8,'miniprism'],
-  ],
-  links: [
-    { type:'switch-trigger', from:'12,0,0', to:'13,0,0' },
-    { type:'switch-trigger', from:'12,0,0', to:'14,0,0' },
-    { type:'switch-trigger', from:'20,0,4', to:'21,0,3' },
-    { type:'switch-trigger', from:'20,0,4', to:'22,0,3' },
-    { type:'teleporter-link', k1:'36,0,3', k2:'36,0,8' },
-  ],
-};
-
-/* ═══════════════════════════════════════════════════════════
-   THREE.JS SETUP
-   ═══════════════════════════════════════════════════════════ */
-const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.2;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-container.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color('#0a0a14');
-scene.fog = new THREE.Fog('#0a0a14', 12, 38);
-
-const camera = new THREE.PerspectiveCamera(42, window.innerWidth/window.innerHeight, 0.5, 75);
-camera.position.set(8, 10, 10);
-
-const ambient = new THREE.AmbientLight('#334466', 1.2);
-scene.add(ambient);
-const sun = new THREE.DirectionalLight('#ffe8d0', 3.5);
-sun.position.set(12, 22, 8);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 60;
-sun.shadow.camera.left = -20; sun.shadow.camera.right = 20;
-sun.shadow.camera.top = 20; sun.shadow.camera.bottom = -20;
-sun.shadow.bias = -0.0003; sun.shadow.normalBias = 0.02;
-scene.add(sun);
-const rim = new THREE.DirectionalLight('#88aaff', 1.2);
-rim.position.set(-5, 3, -4); scene.add(rim);
-const underGlow = new THREE.PointLight('#ff5500', 18, 8, 1.5);
-underGlow.position.set(0, -0.5, 0); scene.add(underGlow);
-
-/* Shared materials */
-const matTileBase   = new THREE.MeshStandardMaterial({ color:'#2a2a38', roughness:0.55, metalness:0.15 });
-const matTileFragile= new THREE.MeshStandardMaterial({ color:'#442222', roughness:0.35, metalness:0.1, emissive:'#331111', emissiveIntensity:0.3 });
-const matTileIce    = new THREE.MeshStandardMaterial({ color:'#335566', roughness:0.2, metalness:0.3, emissive:'#4488aa', emissiveIntensity:0.4 });
-const matTileSwitch = new THREE.MeshStandardMaterial({ color:'#333344', roughness:0.3, metalness:0.2, emissive:'#4466aa', emissiveIntensity:0.5 });
-const matTileTp     = new THREE.MeshStandardMaterial({ color:'#2a2244', roughness:0.25, metalness:0.3, emissive:'#6633cc', emissiveIntensity:0.5 });
-const matTileExit   = new THREE.MeshStandardMaterial({ color:'#115544', roughness:0.3, metalness:0.1, emissive:'#00ffaa', emissiveIntensity:0.55 });
-const matCube       = new THREE.MeshStandardMaterial({ color:'#ff6600', roughness:0.22, metalness:0.05, emissive:'#ff4400', emissiveIntensity:0.35 });
-const matPrism      = new THREE.MeshStandardMaterial({ color:'#ffdd44', roughness:0.12, metalness:0.3, emissive:'#ffaa00', emissiveIntensity:0.9 });
-const matMiniPrism  = new THREE.MeshStandardMaterial({ color:'#00ccff', roughness:0.12, metalness:0.3, emissive:'#0099ff', emissiveIntensity:0.9 });
-const matPrismGlow  = new THREE.MeshStandardMaterial({ color:'#ffffff', roughness:0.1, metalness:0.1, emissive:'#ffffff', emissiveIntensity:1.5 });
-const matBridge     = new THREE.MeshStandardMaterial({ color:'#334455', roughness:0.3, metalness:0.2, emissive:'#335577', emissiveIntensity:0.4 });
-const matSwitchPillar = new THREE.MeshStandardMaterial({ color:'#5566aa', roughness:0.25, metalness:0.4, emissive:'#4466cc', emissiveIntensity:0.6 });
-
-const matCrate      = new THREE.MeshStandardMaterial({ color:'#8b5a2b', roughness:0.8, metalness:0.0, emissive:'#3a200a', emissiveIntensity:0.25 });
-const matPressurePlate = new THREE.MeshStandardMaterial({ color:'#2244aa', roughness:0.2, metalness:0.3, emissive:'#3366ff', emissiveIntensity:0.5 });
-const matDanger     = new THREE.MeshStandardMaterial({ color:'#221111', roughness:0.4, metalness:0.1, emissive:'#ff2233', emissiveIntensity:0.8 });
-const matShaker     = new THREE.MeshStandardMaterial({ color:'#554444', roughness:0.9, metalness:0.0, emissive:'#221111', emissiveIntensity:0.15 });
-const matBooster    = new THREE.MeshStandardMaterial({ color:'#223322', roughness:0.3, metalness:0.2, emissive:'#ffcc00', emissiveIntensity:0.95 });
-
-/* Shared geometries */
-const geoTile       = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
-const geoThinTile   = new THREE.BoxGeometry(TILE_SIZE, 0.2, TILE_SIZE);
-const geoCube       = new THREE.BoxGeometry(CUBE_S, CUBE_S, CUBE_S, 2, 2, 2);
-const geoPrism      = new THREE.OctahedronGeometry(0.18, 0);
-const geoRing       = new THREE.TorusGeometry(0.32, 0.07, 16, 24);
-const geoPillar     = new THREE.CylinderGeometry(0.12, 0.14, 0.35, 8);
-const geoTrail      = new THREE.SphereGeometry(0.05, 4, 4);
-
-/* Scene groups */
-const worldGroup   = new THREE.Group();
-const tilesGroup   = new THREE.Group();
-const prismsGroup  = new THREE.Group();
-const effectsGroup = new THREE.Group();
-const bridgeGroup  = new THREE.Group();
-worldGroup.add(tilesGroup); worldGroup.add(prismsGroup);
-worldGroup.add(effectsGroup); worldGroup.add(bridgeGroup);
-scene.add(worldGroup);
-
-/* ═══════════════════════════════════════════════════════════
-   3D GAME STATE & LEVEL STRUCTURE
-   ═══════════════════════════════════════════════════════════ */
-class Level3D {
-  constructor() {
-    this.name = "New Level";
-    this.world = 0;
-    this.par = 10;
-    this.start = { x:0, y:0, z:0 };
-    this.exit = { x:3, y:0, z:3 };
-    this.blocks = new Map(); // key "x,y,z" -> {x, y, z, type, properties}
-    this.prisms = new Map(); // key "x,y,z" -> {type}
-    this.links = []; // Trigger links: {type, from, to} / {type, k1, k2}
-  }
-}
-
+/* ═══ GAME & EDITOR STATE ═══ */
 let currentLevelIdx = 0;
 let customLevels = []; // Array of Level3D loaded from LocalStorage
 let activeLevel = null; // Current playing Level3D
@@ -1150,149 +95,10 @@ let rightDragMoved = false; // suppress erase-on-release after a camera drag
 
 let linkerSourceKey = null; // Stored switch/tp for linking
 
-/* ═══════════════════════════════════════════════════════════
-   MOVING PLATFORM CLASS
-   ═══════════════════════════════════════════════════════════ */
-class MovingPlatform {
-  constructor(id, startX, startY, startZ, endX, endY, endZ, speed = 1.5, active = true) {
-    this.id = id;
-    this.start = new THREE.Vector3(startX, startY, startZ);
-    this.end = new THREE.Vector3(endX, endY, endZ);
-    this.speed = speed;
-    this.active = active;
-    this.progress = 0;
-    this.direction = 1;
-    this.position = this.start.clone();
-    this.prevPosition = this.start.clone();
-
-    this.mesh = new THREE.Mesh(geoTile, new THREE.MeshStandardMaterial({
-      color: 0x44aa55, roughness: 0.3, metalness: 0.2, emissive: 0x114411, emissiveIntensity: 0.5
-    }));
-    this.mesh.position.copy(this.position);
-    this.mesh.castShadow = true;
-    this.mesh.receiveShadow = true;
-    this.mesh.userData = { key: id, type: 'moving' };
-
-    // outline
-    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geoTile), new THREE.LineBasicMaterial({ color: 0x88ffaa, transparent: true, opacity: 0.6 }));
-    this.mesh.add(edge);
-    bridgeGroup.add(this.mesh);
-  }
-
-  update(dt) {
-    if (!this.active) return;
-    this.prevPosition.copy(this.position);
-    const dist = this.start.distanceTo(this.end);
-    if (dist === 0) return;
-
-    this.progress += this.direction * (this.speed / dist) * dt;
-    if (this.progress >= 1) {
-      this.progress = 1; this.direction = -1;
-    } else if (this.progress <= 0) {
-      this.progress = 0; this.direction = 1;
-    }
-    this.position.lerpVectors(this.start, this.end, this.progress);
-    this.mesh.position.copy(this.position);
-  }
-
-  dispose() {
-    bridgeGroup.remove(this.mesh);
-    if (this.mesh.material) this.mesh.material.dispose();
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   LEVEL DATA CONVERTER
-   ═══════════════════════════════════════════════════════════ */
-function convertTo3D(level) {
-  if (level.is3D) return level;
-  const lvl = new Level3D();
-  lvl.name = level.name;
-  lvl.world = level.world;
-  lvl.par = level.par;
-  lvl.start = { x: level.start[0], y: 0, z: level.start[1] };
-  lvl.exit = { x: level.exit[0], y: 0, z: level.exit[1] };
-
-  // Convert tiles
-  for (const [x, z] of level.tiles) {
-    const key = `${x},0,${z}`;
-    let type = 'normal';
-    if (level.fragile && level.fragile.some(([fx,fz])=>fx===x && fz===z)) type = 'fragile';
-    else if (level.ice && level.ice.some(([ix,iz])=>ix===x && iz===z)) type = 'ice';
-    else if (level.switches && Object.values(level.switches).some(([sx,sz])=>sx===x && sz===z)) type = 'switch';
-    else if (level.teleporters && Object.values(level.teleporters).some(p=>p.some(([tx,tz])=>tx===x && tz===z))) type = 'teleporter';
-
-    lvl.blocks.set(key, { x, y:0, z, type, properties: {} });
-  }
-
-  // Convert prisms
-  for (const [px, pz] of level.prisms) {
-    lvl.prisms.set(`${px},0,${pz}`, { type:'normal' });
-  }
-
-  // Convert switch links
-  if (level.switches && level.bridges) {
-    Object.entries(level.switches).forEach(([bid, [sx,sz]]) => {
-      const bTiles = level.bridges[bid] || [];
-      bTiles.forEach(([bx,bz]) => {
-        // Place bridge tile
-        lvl.blocks.set(`${bx},0,${bz}`, { x:bx, y:0, z:bz, type:'bridge', properties:{} });
-        lvl.links.push({ type:'switch-trigger', from:`${sx},0,${sz}`, to:`${bx},0,${bz}` });
-      });
-    });
-  }
-
-  // Convert teleporters
-  if (level.teleporters) {
-    Object.values(level.teleporters).forEach(pair => {
-      if (pair.length === 2) {
-        lvl.links.push({ type:'teleporter-link', k1:`${pair[0][0]},0,${pair[0][1]}`, k2:`${pair[1][0]},0,${pair[1][1]}` });
-      }
-    });
-  }
-
-  lvl.is3D = true;
-  return lvl;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   SERIALIZE / DESERIALIZE
-   ═══════════════════════════════════════════════════════════ */
-function serializeLevel(level3D) {
-  const blocks = [];
-  level3D.blocks.forEach((b, k) => {
-    blocks.push([b.x, b.y, b.z, b.type, b.properties]);
-  });
-  const prisms = [];
-  level3D.prisms.forEach((p, k) => {
-    const [px,py,pz] = k.split(',').map(Number);
-    prisms.push([px,py,pz,p.type]);
-  });
-  return JSON.stringify({
-    name: level3D.name, world: level3D.world, par: level3D.par,
-    start: [level3D.start.x, level3D.start.y, level3D.start.z],
-    exit: [level3D.exit.x, level3D.exit.y, level3D.exit.z],
-    blocks, prisms, links: level3D.links
-  });
-}
-
-function deserializeLevel(jsonStr) {
-  const data = JSON.parse(jsonStr);
-  const lvl = new Level3D();
-  lvl.name = data.name || "Custom Level";
-  lvl.world = data.world ?? 0;
-  lvl.par = data.par ?? 10;
-  lvl.start = { x:data.start[0], y:data.start[1], z:data.start[2] };
-  lvl.exit = { x:data.exit[0], y:data.exit[1], z:data.exit[2] };
-  data.blocks.forEach(arr => {
-    lvl.blocks.set(`${arr[0]},${arr[1]},${arr[2]}`, { x:arr[0], y:arr[1], z:arr[2], type:arr[3], properties:arr[4] || {} });
-  });
-  data.prisms.forEach(arr => {
-    lvl.prisms.set(`${arr[0]},${arr[1]},${arr[2]}`, { type:arr[3] || 'normal' });
-  });
-  lvl.links = data.links || [];
-  return lvl;
-}
+// Compound objects: while "O" is held, every block placed is tagged with the
+// same group id (stored in block.properties.group). Linking a switch/plate to
+// any grouped block expands the trigger to all triggerable members.
+let currentGroupId = null; // active group id while O is held, else null
 
 /* ═══════════════════════════════════════════════════════════
    CLEAR / BUILD LEVEL
@@ -1318,6 +124,7 @@ function clearLevel() {
   teleporterMap.clear();
   switchStates.clear();
   linkerSourceKey = null;
+  currentGroupId = null;
 }
 
 function getPlayerWorldPos(gx, gy, gz, miniState) {
@@ -1369,6 +176,34 @@ function buildLevel3D(level3D) {
       return;
     }
     createBlockMesh(block, key);
+  });
+
+  // Compound objects: a moving block tagged with a group id drives the whole
+  // object. Every other member of that group rides along as a passenger so the
+  // entire structure translates together — not just the single moving tile.
+  const groupMembers = new Map();
+  activeBlocks.forEach(b => {
+    const g = b.properties && b.properties.group;
+    if (g === undefined || g === null) return;
+    if (!groupMembers.has(g)) groupMembers.set(g, []);
+    groupMembers.get(g).push(b);
+  });
+  groupMembers.forEach(members => {
+    const driverBlock = members.find(b => b.type === 'moving' && b.platformInstance);
+    if (!driverBlock) return; // group has no mover — nothing to carry
+    const driver = driverBlock.platformInstance;
+    members.forEach(other => {
+      if (other === driverBlock) return;
+      let mesh = other.mesh;
+      if (other.type === 'moving' && other.platformInstance && other.platformInstance !== driver) {
+        // A second mover in the group: freeze its own motion and let the driver carry it
+        mesh = other.platformInstance.mesh;
+        other.platformInstance.active = false;
+        other.platformInstance.isPassenger = true;
+        other.platformInstance.end.copy(other.platformInstance.start);
+      }
+      if (mesh) driver.attachMember(other, mesh);
+    });
   });
 
   // Render Prisms
@@ -1633,16 +468,27 @@ function showMessage(text, dur=2) {
 function getBlocksInColumn(gx, gz) {
   const list = [];
   activeBlocks.forEach((block, key) => {
+    // Moving drivers and compound-object passengers have dynamic positions —
+    // they are reported from the platform loop below, not their static cell.
+    if (block.type === 'moving' || block.isPassenger) return;
     if (block.x === gx && block.z === gz && block.active && !block.broken) {
       list.push(block);
     }
   });
-  // Check moving platforms
+  // Check moving platforms (driver tile + any carried passengers)
   movingPlatformsList.forEach(mp => {
+    if (mp.isPassenger) return; // carried by another driver
     const mpgx = Math.round(mp.position.x);
     const mpgz = Math.round(mp.position.z);
     if (mpgx === gx && mpgz === gz) {
       list.push({ x: mpgx, y: Math.round(mp.position.y), z: mpgz, type: 'moving', platformInstance: mp });
+    }
+    for (const m of mp.members) {
+      const cx = Math.round(mp.position.x + m.gridOffset.x);
+      const cz = Math.round(mp.position.z + m.gridOffset.z);
+      if (cx === gx && cz === gz) {
+        list.push({ x: cx, y: Math.round(mp.position.y + m.gridOffset.y), z: cz, type: m.block.type, platformInstance: mp });
+      }
     }
   });
   return list.sort((a,b) => b.y - a.y);
@@ -1650,13 +496,23 @@ function getBlocksInColumn(gx, gz) {
 
 function checkRidingPlatform() {
   if (isRolling || isFalling || isTeleporting) return null;
-  // If player stands exactly on a moving platform
+  // If player stands exactly on a moving platform — its driver tile or any
+  // passenger cell of a compound object.
   for (const mp of movingPlatformsList) {
+    if (mp.isPassenger) continue;
     const mpgx = Math.round(mp.position.x);
     const mpgy = Math.round(mp.position.y);
     const mpgz = Math.round(mp.position.z);
     if (playerGridPos.x === mpgx && playerGridPos.z === mpgz && playerGridPos.y === mpgy) {
       return mp;
+    }
+    for (const m of mp.members) {
+      const cx = Math.round(mp.position.x + m.gridOffset.x);
+      const cy = Math.round(mp.position.y + m.gridOffset.y);
+      const cz = Math.round(mp.position.z + m.gridOffset.z);
+      if (playerGridPos.x === cx && playerGridPos.z === cz && playerGridPos.y === cy) {
+        return mp;
+      }
     }
   }
   return null;
@@ -2717,6 +1573,29 @@ function drawEditorWires() {
     }
   });
 
+  // Draw faint links between members of each compound object so groupings
+  // are visible in the editor.
+  const groups = new Map(); // groupId -> [block,...]
+  activeLevel.blocks.forEach(b => {
+    const g = b.properties && b.properties.group;
+    if (g === undefined || g === null) return;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(b);
+  });
+  groups.forEach(members => {
+    if (members.length < 2) return;
+    const cx = members.reduce((s, b) => s + b.x, 0) / members.length;
+    const cy = members.reduce((s, b) => s + b.y, 0) / members.length + 0.5;
+    const cz = members.reduce((s, b) => s + b.z, 0) / members.length;
+    const centroid = new THREE.Vector3(cx, cy, cz);
+    members.forEach(b => {
+      const geo = new THREE.BufferGeometry().setFromPoints([centroid, new THREE.Vector3(b.x, b.y + 0.5, b.z)]);
+      const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xffaa00, dashSize: 0.18, gapSize: 0.12, opacity: 0.7, transparent: true }));
+      line.computeLineDistances();
+      editorWiresGroup.add(line);
+    });
+  });
+
   // Draw paths for moving platforms
   activeLevel.blocks.forEach((b, k) => {
     if (b.type === 'moving' && b.properties.targetX !== undefined) {
@@ -2840,6 +1719,7 @@ function editorPlaceBlock(x, y, z, type) {
   if (existing && existing.type === type) return false;
   if (existing) editorEraseKey(key, ['block']);
   const b = { x, y, z, type, properties: {} };
+  if (currentGroupId !== null) b.properties.group = currentGroupId;
   activeLevel.blocks.set(key, b);
   const rb = { ...b, broken: false, active: true };
   activeBlocks.set(key, rb);
@@ -2913,12 +1793,32 @@ function handleEditorClick(e) {
       source.properties.targetX = target ? target.x : hit.x;
       source.properties.targetY = target ? target.y : hit.y;
       source.properties.targetZ = target ? target.z : hit.z;
-      showMessage('PLATFORM DESTINATION SET');
+      // If this mover is part of a compound object, the whole object travels.
+      const g = source.properties.group;
+      let count = 1;
+      if (g !== undefined && g !== null) {
+        count = [...activeLevel.blocks.values()].filter(b => b.properties && b.properties.group === g).length;
+      }
+      showMessage(count > 1 ? `OBJECT DESTINATION SET (${count} BLOCKS)` : 'PLATFORM DESTINATION SET');
       linked = true;
     } else if (source && target && linkerSourceKey !== hit.hitKey) {
       if ((source.type === 'switch' || source.type === 'pressureplate') && (target.type === 'bridge' || target.type === 'moving')) {
-        activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: hit.hitKey });
-        showMessage('TRIGGER LINKED');
+        // If the target belongs to a compound object, link every triggerable
+        // member of that group — not just the block that was clicked.
+        const groupId = target.properties && target.properties.group;
+        let members = [target];
+        if (groupId !== undefined && groupId !== null) {
+          members = [...activeLevel.blocks.values()].filter(b =>
+            b.properties && b.properties.group === groupId &&
+            (b.type === 'bridge' || b.type === 'moving'));
+        }
+        members.forEach(m => {
+          const tk = `${m.x},${m.y},${m.z}`;
+          if (!activeLevel.links.some(l => l.type === 'switch-trigger' && l.from === linkerSourceKey && l.to === tk)) {
+            activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: tk });
+          }
+        });
+        showMessage(members.length > 1 ? `OBJECT TRIGGER LINKED (${members.length} BLOCKS)` : 'TRIGGER LINKED');
         linked = true;
       } else if (source.type === 'teleporter' && target.type === 'teleporter') {
         activeLevel.links.push({ type: 'teleporter-link', k1: linkerSourceKey, k2: hit.hitKey });
@@ -3013,6 +1913,7 @@ function enterPlaytestMode() {
     <button id="btn-playtest-stop" class="editor-btn danger">STOP PLAYTEST</button>
   `;
   document.getElementById('editor-instructions').style.display = 'none';
+  document.getElementById('editor-height-ruler').style.display = 'none';
 
   if (editorGridHelper) editorGridHelper.visible = false;
   if (editorGhostBlock) editorGhostBlock.visible = false;
@@ -3044,6 +1945,7 @@ function exitPlaytestMode() {
     </div>
   `;
   document.getElementById('editor-instructions').style.display = 'flex';
+  document.getElementById('editor-height-ruler').style.display = 'flex';
 
   if (editorGridHelper) editorGridHelper.visible = true;
   if (editorGhostBlock) editorGhostBlock.visible = true;
@@ -3117,6 +2019,17 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.code === 'KeyX') { selectToolByName('eraser'); return; }
     if (e.code === 'KeyL') { selectToolByName('linker'); return; }
+    if (e.code === 'KeyO') {
+      // Start a new compound object: every block placed while O is held shares
+      // this id. Pick max existing group + 1 so it stays unique after load.
+      let maxG = 0;
+      activeLevel.blocks.forEach(b => {
+        if (b.properties && typeof b.properties.group === 'number' && b.properties.group > maxG) maxG = b.properties.group;
+      });
+      currentGroupId = maxG + 1;
+      showMessage('GROUPING — PLACE BLOCKS, RELEASE O TO FINISH');
+      return;
+    }
     if (e.code === 'Escape') {
       if (linkerSourceKey) { linkerSourceKey = null; showMessage('LINK CANCELLED', 1); }
       return;
@@ -3156,6 +2069,10 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
   keysPressed[e.code] = false;
+  if (e.code === 'KeyO' && currentGroupId !== null) {
+    currentGroupId = null;
+    drawEditorWires();
+  }
 });
 
 // Mobile Controls
@@ -3551,9 +2468,12 @@ function animate(timestamp) {
       const delta = mpRidden.position.clone().sub(mpRidden.prevPosition);
       playerCube.position.add(delta);
       cameraTarget.add(delta);
-      playerGridPos.x = Math.round(mpRidden.position.x);
-      playerGridPos.y = Math.round(mpRidden.position.y);
-      playerGridPos.z = Math.round(mpRidden.position.z);
+      // Derive grid cell from the player's own position so riding a passenger
+      // cell (not just the driver tile) tracks correctly.
+      const size = isMini ? CUBE_S * 0.5 : CUBE_S;
+      playerGridPos.x = Math.round(playerCube.position.x);
+      playerGridPos.y = Math.round(playerCube.position.y - 0.5 - size/2);
+      playerGridPos.z = Math.round(playerCube.position.z);
     }
 
     // Rolling animation
@@ -3700,6 +2620,3 @@ loadPreMadeLevel(0);
 requestAnimationFrame(animate);
 
 console.log('%c🟧 GOOSE — 3D & Level Editor Ready', 'color:#ff6600;font-size:18px;');
-</script>
-</body>
-</html>
