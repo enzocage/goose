@@ -1170,6 +1170,8 @@ class MovingPlatform {
     this.direction = 1;
     this.position = this.start.clone();
     this.prevPosition = this.start.clone();
+    this.members = [];        // compound-object passengers carried rigidly with this driver
+    this.isPassenger = false; // true if this platform is itself carried by another driver
 
     this.mesh = new THREE.Mesh(geoTile, new THREE.MeshStandardMaterial({
       color: 0x44aa55, roughness: 0.3, metalness: 0.2, emissive: 0x114411, emissiveIntensity: 0.5
@@ -1183,6 +1185,19 @@ class MovingPlatform {
     const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geoTile), new THREE.LineBasicMaterial({ color: 0x88ffaa, transparent: true, opacity: 0.6 }));
     this.mesh.add(edge);
     bridgeGroup.add(this.mesh);
+  }
+
+  // Attach a grouped block so it rides rigidly with this platform.
+  // gridOffset is the member's cell offset from the driver start (used for
+  // collision); baseMeshPos preserves the mesh's own render offset (e.g. the
+  // +0.4 Y of bridge tiles).
+  attachMember(block, mesh) {
+    this.members.push({
+      block, mesh,
+      baseMeshPos: mesh.position.clone(),
+      gridOffset: new THREE.Vector3(block.x - this.start.x, block.y - this.start.y, block.z - this.start.z)
+    });
+    block.isPassenger = true;
   }
 
   update(dt) {
@@ -1199,6 +1214,12 @@ class MovingPlatform {
     }
     this.position.lerpVectors(this.start, this.end, this.progress);
     this.mesh.position.copy(this.position);
+
+    // Carry passengers by the same displacement
+    if (this.members.length) {
+      const disp = this.position.clone().sub(this.start);
+      for (const m of this.members) m.mesh.position.copy(m.baseMeshPos).add(disp);
+    }
   }
 
   dispose() {
@@ -1376,6 +1397,34 @@ function buildLevel3D(level3D) {
       return;
     }
     createBlockMesh(block, key);
+  });
+
+  // Compound objects: a moving block tagged with a group id drives the whole
+  // object. Every other member of that group rides along as a passenger so the
+  // entire structure translates together — not just the single moving tile.
+  const groupMembers = new Map();
+  activeBlocks.forEach(b => {
+    const g = b.properties && b.properties.group;
+    if (g === undefined || g === null) return;
+    if (!groupMembers.has(g)) groupMembers.set(g, []);
+    groupMembers.get(g).push(b);
+  });
+  groupMembers.forEach(members => {
+    const driverBlock = members.find(b => b.type === 'moving' && b.platformInstance);
+    if (!driverBlock) return; // group has no mover — nothing to carry
+    const driver = driverBlock.platformInstance;
+    members.forEach(other => {
+      if (other === driverBlock) return;
+      let mesh = other.mesh;
+      if (other.type === 'moving' && other.platformInstance && other.platformInstance !== driver) {
+        // A second mover in the group: freeze its own motion and let the driver carry it
+        mesh = other.platformInstance.mesh;
+        other.platformInstance.active = false;
+        other.platformInstance.isPassenger = true;
+        other.platformInstance.end.copy(other.platformInstance.start);
+      }
+      if (mesh) driver.attachMember(other, mesh);
+    });
   });
 
   // Render Prisms
@@ -1640,16 +1689,27 @@ function showMessage(text, dur=2) {
 function getBlocksInColumn(gx, gz) {
   const list = [];
   activeBlocks.forEach((block, key) => {
+    // Moving drivers and compound-object passengers have dynamic positions —
+    // they are reported from the platform loop below, not their static cell.
+    if (block.type === 'moving' || block.isPassenger) return;
     if (block.x === gx && block.z === gz && block.active && !block.broken) {
       list.push(block);
     }
   });
-  // Check moving platforms
+  // Check moving platforms (driver tile + any carried passengers)
   movingPlatformsList.forEach(mp => {
+    if (mp.isPassenger) return; // carried by another driver
     const mpgx = Math.round(mp.position.x);
     const mpgz = Math.round(mp.position.z);
     if (mpgx === gx && mpgz === gz) {
       list.push({ x: mpgx, y: Math.round(mp.position.y), z: mpgz, type: 'moving', platformInstance: mp });
+    }
+    for (const m of mp.members) {
+      const cx = Math.round(mp.position.x + m.gridOffset.x);
+      const cz = Math.round(mp.position.z + m.gridOffset.z);
+      if (cx === gx && cz === gz) {
+        list.push({ x: cx, y: Math.round(mp.position.y + m.gridOffset.y), z: cz, type: m.block.type, platformInstance: mp });
+      }
     }
   });
   return list.sort((a,b) => b.y - a.y);
@@ -1657,13 +1717,23 @@ function getBlocksInColumn(gx, gz) {
 
 function checkRidingPlatform() {
   if (isRolling || isFalling || isTeleporting) return null;
-  // If player stands exactly on a moving platform
+  // If player stands exactly on a moving platform — its driver tile or any
+  // passenger cell of a compound object.
   for (const mp of movingPlatformsList) {
+    if (mp.isPassenger) continue;
     const mpgx = Math.round(mp.position.x);
     const mpgy = Math.round(mp.position.y);
     const mpgz = Math.round(mp.position.z);
     if (playerGridPos.x === mpgx && playerGridPos.z === mpgz && playerGridPos.y === mpgy) {
       return mp;
+    }
+    for (const m of mp.members) {
+      const cx = Math.round(mp.position.x + m.gridOffset.x);
+      const cy = Math.round(mp.position.y + m.gridOffset.y);
+      const cz = Math.round(mp.position.z + m.gridOffset.z);
+      if (playerGridPos.x === cx && playerGridPos.z === cz && playerGridPos.y === cy) {
+        return mp;
+      }
     }
   }
   return null;
@@ -2944,7 +3014,13 @@ function handleEditorClick(e) {
       source.properties.targetX = target ? target.x : hit.x;
       source.properties.targetY = target ? target.y : hit.y;
       source.properties.targetZ = target ? target.z : hit.z;
-      showMessage('PLATFORM DESTINATION SET');
+      // If this mover is part of a compound object, the whole object travels.
+      const g = source.properties.group;
+      let count = 1;
+      if (g !== undefined && g !== null) {
+        count = [...activeLevel.blocks.values()].filter(b => b.properties && b.properties.group === g).length;
+      }
+      showMessage(count > 1 ? `OBJECT DESTINATION SET (${count} BLOCKS)` : 'PLATFORM DESTINATION SET');
       linked = true;
     } else if (source && target && linkerSourceKey !== hit.hitKey) {
       if ((source.type === 'switch' || source.type === 'pressureplate') && (target.type === 'bridge' || target.type === 'moving')) {
@@ -3613,9 +3689,12 @@ function animate(timestamp) {
       const delta = mpRidden.position.clone().sub(mpRidden.prevPosition);
       playerCube.position.add(delta);
       cameraTarget.add(delta);
-      playerGridPos.x = Math.round(mpRidden.position.x);
-      playerGridPos.y = Math.round(mpRidden.position.y);
-      playerGridPos.z = Math.round(mpRidden.position.z);
+      // Derive grid cell from the player's own position so riding a passenger
+      // cell (not just the driver tile) tracks correctly.
+      const size = isMini ? CUBE_S * 0.5 : CUBE_S;
+      playerGridPos.x = Math.round(playerCube.position.x);
+      playerGridPos.y = Math.round(playerCube.position.y - 0.5 - size/2);
+      playerGridPos.z = Math.round(playerCube.position.z);
     }
 
     // Rolling animation
