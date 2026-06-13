@@ -2599,8 +2599,8 @@ function animate(timestamp) {
       const lft = new THREE.Vector3(-fwd.z, 0, fwd.x);
       if (keysPressed['KeyW'] || keysPressed['ArrowUp'])    editorCameraTarget.addScaledVector(fwd,  panSpeed * dt);
       if (keysPressed['KeyS'] || keysPressed['ArrowDown'])  editorCameraTarget.addScaledVector(fwd, -panSpeed * dt);
-      if (keysPressed['KeyA'] || keysPressed['ArrowLeft'])  editorCameraTarget.addScaledVector(lft,  panSpeed * dt);
-      if (keysPressed['KeyD'] || keysPressed['ArrowRight']) editorCameraTarget.addScaledVector(lft, -panSpeed * dt);
+      if (keysPressed['KeyA'] || keysPressed['ArrowLeft'])  editorCameraTarget.addScaledVector(lft, -panSpeed * dt);
+      if (keysPressed['KeyD'] || keysPressed['ArrowRight']) editorCameraTarget.addScaledVector(lft,  panSpeed * dt);
       if (keysPressed['KeyQ']) editorCameraYaw -= rotSpeed * dt;
       if (keysPressed['KeyE']) editorCameraYaw += rotSpeed * dt;
     }

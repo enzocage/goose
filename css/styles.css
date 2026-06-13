@@ -324,3 +324,71 @@
     color: var(--accent); font-weight: bold; font-size: 9px;
     margin-left: 5px; text-transform: uppercase;
   }
+
+  /* ═══ SUBTLE BACKGROUND MUSIC PLAYER ═══ */
+  #music-ui {
+    position: fixed; left: 16px; bottom: 16px; z-index: 240;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  }
+  #music-toggle {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(15, 15, 25, 0.55); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(224, 224, 224, 0.55); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.25s; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+  #music-toggle:hover { color: var(--accent2); border-color: rgba(0, 204, 255, 0.4); background: rgba(15, 15, 25, 0.85); }
+  #music-toggle.active { color: var(--accent2); border-color: rgba(0, 204, 255, 0.5); }
+
+  #music-panel {
+    width: 300px; max-width: calc(100dvw - 32px);
+    background: rgba(12, 12, 20, 0.92); backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 14px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+    overflow: hidden; color: var(--text);
+    opacity: 0; transform: translateY(8px) scale(0.98); pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  #music-panel.open { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+
+  #music-header {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 11px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  #music-title-label { font-size: 10px; letter-spacing: 0.12em; color: var(--accent2); font-weight: bold; }
+  #music-status { font-size: 10px; color: rgba(224, 224, 224, 0.6); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #music-list { max-height: 220px; overflow-y: auto; padding: 4px 0; }
+  .music-row {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 7px 14px; background: none; border: none; cursor: pointer;
+    color: rgba(224, 224, 224, 0.65); font-size: 12px; text-align: left;
+    transition: background 0.15s, color 0.15s;
+  }
+  .music-row:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+  .music-row.active { background: rgba(0, 204, 255, 0.1); color: var(--accent2); font-weight: 600; }
+  .music-row-num { font-size: 10px; opacity: 0.5; font-variant-numeric: tabular-nums; }
+  .music-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #music-progress { position: relative; height: 4px; background: rgba(255, 255, 255, 0.1); cursor: pointer; }
+  #music-progress-fill { height: 100%; width: 0; background: var(--accent2); transition: width 0.1s linear; }
+  #music-seek { position: absolute; top: -6px; left: 0; width: 100%; height: 16px; opacity: 0; cursor: pointer; -webkit-appearance: none; background: transparent; }
+
+  #music-controls { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+  #music-controls button {
+    background: none; border: none; color: rgba(224, 224, 224, 0.8);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    padding: 4px; border-radius: 6px; transition: color 0.15s, background 0.15s;
+  }
+  #music-controls button:hover { color: var(--accent2); background: rgba(255, 255, 255, 0.06); }
+  #music-play {
+    width: 34px; height: 34px; background: rgba(0, 204, 255, 0.12) !important;
+    border: 1px solid rgba(0, 204, 255, 0.3) !important; color: var(--accent2) !important;
+  }
+  #music-time { font-size: 10px; color: rgba(224, 224, 224, 0.55); font-variant-numeric: tabular-nums; margin-left: auto; }
+  #music-vol { width: 60px; height: 14px; -webkit-appearance: none; background: transparent; cursor: pointer; }
+  #music-vol::-webkit-slider-runnable-track { height: 3px; background: rgba(255,255,255,0.2); border-radius: 2px; }
+  #music-vol::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; border-radius: 50%; background: var(--accent2); margin-top: -3.5px; }
+  #music-list::-webkit-scrollbar { width: 6px; }
+  #music-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }

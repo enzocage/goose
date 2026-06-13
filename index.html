@@ -263,10 +263,39 @@
   </div>
 </div>
 
+<!-- Subtle background music player (hidden behind a toggle icon) -->
+<div id="music-ui">
+  <div id="music-panel">
+    <div id="music-header">
+      <span id="music-title-label">♪ MUSIC · ENZO CAGE</span>
+      <span id="music-status">Ready</span>
+    </div>
+    <div id="music-list"></div>
+    <div id="music-progress"><div id="music-progress-fill"></div>
+      <input type="range" id="music-seek" value="0" min="0" max="100">
+    </div>
+    <div id="music-controls">
+      <button id="music-prev" title="Previous"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg></button>
+      <button id="music-play" title="Play / Pause">
+        <svg id="music-icon-play" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        <svg id="music-icon-pause" class="hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+      </button>
+      <button id="music-next" title="Next"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg></button>
+      <span id="music-time">00:00 / 00:00</span>
+      <input type="range" id="music-vol" min="0" max="1" step="0.05" value="0.45" title="Volume">
+    </div>
+  </div>
+  <button id="music-toggle" title="Music player" aria-label="Toggle music player">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+  </button>
+</div>
+<audio id="music-audio"></audio>
+
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 
 <script type="module" src="js/main.js"></script>
+<script type="module" src="js/music-player.js"></script>
 </body>
 </html>
