@@ -23,12 +23,20 @@ export class MovingPlatform {
     this.end = new THREE.Vector3(endX, endY, endZ);
     this.speed = speed;
     this.active = active;
-    this.progress = 0;
-    this.direction = 1;
     this.position = this.start.clone();
     this.prevPosition = this.start.clone();
     this.members = [];        // compound-object passengers carried rigidly with this driver
     this.isPassenger = false; // true if this platform is itself carried by another driver
+
+    // Edge-style discrete stepping: the block moves one whole cell at a time
+    // (eased), always resting on / cleanly transiting integer cells. This keeps
+    // standing solid — you are either fully on the block's cell or not at all.
+    this.path = MovingPlatform.buildPath(this.start, this.end);
+    this.seg = 0;                          // index of the cell we move FROM
+    this.dir = this.path.length > 1 ? 1 : 0; // travel direction along the path
+    this.stepT = 0;                        // 0..1 progress within the current 1-cell step
+    this.moveDir = new THREE.Vector3();    // integer step direction this frame (0 = idle)
+    this.targetCell = this.start.clone();  // integer cell currently being entered
 
     this.mesh = new THREE.Mesh(geoTile, new THREE.MeshStandardMaterial({
       color: 0x44aa55, roughness: 0.3, metalness: 0.2, emissive: 0x114411, emissiveIntensity: 0.5
@@ -57,19 +65,44 @@ export class MovingPlatform {
     block.isPassenger = true;
   }
 
+  // Integer waypoints from a→b, one cell per step (Chebyshev).
+  static buildPath(a, b) {
+    const steps = Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y), Math.abs(b.z - a.z));
+    if (steps === 0) return [a.clone()];
+    const path = [];
+    for (let i = 0; i <= steps; i++) {
+      path.push(new THREE.Vector3(
+        Math.round(a.x + (b.x - a.x) * i / steps),
+        Math.round(a.y + (b.y - a.y) * i / steps),
+        Math.round(a.z + (b.z - a.z) * i / steps)
+      ));
+    }
+    return path;
+  }
+
   update(dt) {
     if (!this.active) return;
     this.prevPosition.copy(this.position);
-    const dist = this.start.distanceTo(this.end);
-    if (dist === 0) return;
+    if (this.path.length < 2 || this.dir === 0) { this.moveDir.set(0, 0, 0); return; }
 
-    this.progress += this.direction * (this.speed / dist) * dt;
-    if (this.progress >= 1) {
-      this.progress = 1; this.direction = -1;
-    } else if (this.progress <= 0) {
-      this.progress = 0; this.direction = 1;
+    const from = this.path[this.seg];
+    const to = this.path[this.seg + this.dir];
+    this.targetCell.copy(to);
+    this.moveDir.copy(to).sub(from);
+
+    // speed is cells per second; ease in/out for a weighty, solid feel
+    this.stepT += this.speed * dt;
+    const tt = Math.min(this.stepT, 1);
+    const e = tt < 0.5 ? 2 * tt * tt : 1 - Math.pow(-2 * tt + 2, 2) / 2;
+    this.position.lerpVectors(from, to, e);
+
+    if (this.stepT >= 1) {
+      this.stepT = 0;
+      this.seg += this.dir;
+      this.position.copy(this.path[this.seg]); // snap to clean integer cell
+      if (this.seg >= this.path.length - 1) this.dir = -1;
+      else if (this.seg <= 0) this.dir = 1;
     }
-    this.position.lerpVectors(this.start, this.end, this.progress);
     this.mesh.position.copy(this.position);
 
     // Carry passengers by the same displacement

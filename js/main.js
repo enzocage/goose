@@ -23,6 +23,8 @@ let levelSnapshot = null; // Serialized pristine state, used for full reset on d
 let activeBlocks = new Map(); // key -> block representation
 let activePrisms = new Map(); // key -> prism representation
 let movingPlatformsList = [];
+let ridingPlatform = null; // mover the player is currently locked onto (sticky)
+let ridingOffset = new THREE.Vector3(); // fixed cube offset from the mover while riding
 let switchMap = new Map(); // switchKey -> [targetKeys]
 let teleporterMap = new Map(); // tpKey -> targetTpKey
 let switchStates = new Map(); // key -> activeState
@@ -44,6 +46,11 @@ let balanceDir = null;
 let balanceTimer = 0;
 let lastMoveDir = { x:0, z:0 };
 const keysPressed = {};
+// Held-direction auto-repeat while playing: roll one cell every 300ms.
+let repeatMoveCode = null;            // the movement key currently held for repeat
+let repeatMoveDir = { x:0, z:0 };
+let moveRepeatTimer = 0;
+const MOVE_REPEAT_MS = 300;
 let rollStartGridPos = { x:0, y:0, z:0 };
 let boosterMovesActive = 0;
 let moveCount = 0;
@@ -122,6 +129,7 @@ function clearLevel() {
 
   movingPlatformsList.forEach(mp => mp.dispose());
   movingPlatformsList = [];
+  ridingPlatform = null;
   activeBlocks.clear();
   activePrisms.clear();
   switchMap.clear();
@@ -519,6 +527,23 @@ function checkRidingPlatform() {
       if (playerGridPos.x === cx && playerGridPos.z === cz && playerGridPos.y === cy) {
         return mp;
       }
+    }
+  }
+  return null;
+}
+
+// If a moving block is advancing into the player's cell (same level, player not
+// riding it), the block shoves the player along its travel direction.
+function checkPushedByPlatform() {
+  if (isRolling || isFalling || isTeleporting || isBalancing) return null;
+  for (const mp of movingPlatformsList) {
+    if (mp.isPassenger || !mp.active) continue;
+    if (mp.moveDir.x === 0 && mp.moveDir.y === 0 && mp.moveDir.z === 0) continue;
+    const tc = mp.targetCell;
+    if (playerGridPos.x === Math.round(tc.x) &&
+        playerGridPos.y === Math.round(tc.y) &&
+        playerGridPos.z === Math.round(tc.z)) {
+      return mp;
     }
   }
   return null;
@@ -1493,7 +1518,7 @@ function updateEditorSlicing() {
   });
   activePrisms.forEach((p, k) => {
     if (!p.mesh) return;
-    const [,, py] = k.split(',').map(Number);
+    const py = k.split(',').map(Number)[1]; // key is "x,y,z" → y is the height
     if (sliceModeActive && py > editY) {
       p.mesh.visible = false;
     } else {
@@ -1872,9 +1897,10 @@ function handleEditorClick(e) {
     return;
   }
 
-  // Placement tools
+  // Placement tools — blocks go only onto the selected level (raise the height
+  // ruler to build higher); drag-painting already snaps to that plane.
   if (BLOCK_TOOLS.includes(selectedTool)) {
-    if (editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playRoll();
+    if (hit.y === editY && editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playRoll();
   } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
     const c = snapItemCell(hit);
     if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
@@ -2079,6 +2105,9 @@ window.addEventListener('keydown', (e) => {
   }
 
   // Normal gameplay keys
+  // Arm held-key auto-repeat for the pressed direction (loop repeats every 300ms).
+  const moveMap = { ArrowUp:[0,-1], KeyW:[0,-1], ArrowDown:[0,1], KeyS:[0,1], ArrowLeft:[-1,0], KeyA:[-1,0], ArrowRight:[1,0], KeyD:[1,0] };
+  if (moveMap[e.code]) { repeatMoveCode = e.code; repeatMoveDir = { x: moveMap[e.code][0], z: moveMap[e.code][1] }; moveRepeatTimer = 0; }
   switch (e.code) {
     case 'ArrowUp': case 'KeyW': e.preventDefault(); handleMove(0, -1); break;
     case 'ArrowDown': case 'KeyS': e.preventDefault(); handleMove(0, 1); break;
@@ -2149,6 +2178,8 @@ renderer.domElement.addEventListener('mousemove', (e) => {
     const hit = editorRaycast(e);
     const tooltip = document.getElementById('editor-tooltip');
     if (hit && editorGhostBlock) {
+      // Block-placement preview is only shown on the currently selected level.
+      let ghostVisible = !(BLOCK_TOOLS.includes(selectedTool) && hit.y !== editY);
       // Set ghost block color, geometry and position dynamically based on tool
       if (selectedTool === 'eraser') {
         editorGhostBlock.material.color.setHex(0xff3355);
@@ -2201,10 +2232,10 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         }
         editorGhostBlock.position.set(hit.x, targetY, hit.z);
       }
-      editorGhostBlock.visible = true;
+      editorGhostBlock.visible = ghostVisible;
 
       // Update Tooltip
-      if (tooltip) {
+      if (tooltip && ghostVisible) {
         let text = `${selectedTool.toUpperCase()}`;
         text += ` <span class="tooltip-coord">(${hit.x}, ${hit.y}, ${hit.z})</span>`;
         if (hit.hitKey && BLOCK_TOOLS.includes(selectedTool)) {
@@ -2214,6 +2245,8 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY + 15) + 'px';
         tooltip.style.display = 'block';
+      } else if (tooltip) {
+        tooltip.style.display = 'none';
       }
     } else if (editorGhostBlock) {
       editorGhostBlock.visible = false;
@@ -2494,21 +2527,70 @@ function animate(timestamp) {
       if (miniTimer <= 0) checkGrowBack();
     }
 
+    // Held-direction auto-repeat: roll one cell every 300ms while a key is held.
+    if (repeatMoveCode && keysPressed[repeatMoveCode] && !isLevelComplete) {
+      moveRepeatTimer += dt * 1000;
+      if (moveRepeatTimer >= MOVE_REPEAT_MS) {
+        moveRepeatTimer -= MOVE_REPEAT_MS;
+        handleMove(repeatMoveDir.x, repeatMoveDir.z);
+      }
+    } else {
+      repeatMoveCode = null;
+      moveRepeatTimer = 0;
+    }
+
     // Platforms update
     movingPlatformsList.forEach(mp => mp.update(dt));
 
-    // Player Riding Platform
-    const mpRidden = checkRidingPlatform();
-    if (mpRidden) {
-      const delta = mpRidden.position.clone().sub(mpRidden.prevPosition);
-      playerCube.position.add(delta);
-      cameraTarget.add(delta);
-      // Derive grid cell from the player's own position so riding a passenger
-      // cell (not just the driver tile) tracks correctly.
-      const size = isMini ? CUBE_S * 0.5 : CUBE_S;
+    // Player riding a mover — STICKY + RIGID: once aboard, the cube is locked
+    // to the mover by a fixed cell offset (cube = mover.position + offset) every
+    // frame, so it is transported with the block and never slides across it.
+    const size = isMini ? CUBE_S * 0.5 : CUBE_S;
+    if (isRolling || isFalling || isTeleporting) {
+      ridingPlatform = null;
+    } else {
+      if (!ridingPlatform) {
+        ridingPlatform = checkRidingPlatform(); // step aboard
+        if (ridingPlatform) {
+          // Lock onto the cell we boarded (snap horizontal offset to whole cells,
+          // keep the standing height). Works for the driver tile and any
+          // compound-object passenger cell.
+          ridingOffset.set(
+            Math.round(playerCube.position.x - ridingPlatform.position.x),
+            0.5 + size / 2,
+            Math.round(playerCube.position.z - ridingPlatform.position.z)
+          );
+        }
+      }
+      if (ridingPlatform && !ridingPlatform.active) ridingPlatform = null;
+    }
+
+    if (ridingPlatform) {
+      const before = playerCube.position.clone();
+      playerCube.position.copy(ridingPlatform.position).add(ridingOffset);
+      cameraTarget.add(playerCube.position.clone().sub(before));
       playerGridPos.x = Math.round(playerCube.position.x);
       playerGridPos.y = Math.round(playerCube.position.y - 0.5 - size/2);
       playerGridPos.z = Math.round(playerCube.position.z);
+    } else {
+      // Otherwise, a mover advancing into the player's cell shoves them along.
+      const mpPush = checkPushedByPlatform();
+      if (mpPush) {
+        const delta = mpPush.position.clone().sub(mpPush.prevPosition);
+        playerCube.position.add(delta);
+        cameraTarget.add(delta);
+        playerGridPos.x = Math.round(playerCube.position.x);
+        playerGridPos.y = Math.round(playerCube.position.y - 0.5 - size/2);
+        playerGridPos.z = Math.round(playerCube.position.z);
+        // Shoved over a ledge with nothing to stand on → fall.
+        const col = getBlocksInColumn(playerGridPos.x, playerGridPos.z);
+        if (!col.some(b => b.y === playerGridPos.y)) {
+          const landing = col.find(b => b.y < playerGridPos.y);
+          isFalling = true; fallVelY = 0;
+          playerCube.userData.fallTargetY = landing ? landing.y : -10;
+          audio.playFall();
+        }
+      }
     }
 
     // Rolling animation
