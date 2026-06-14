@@ -79,6 +79,26 @@ const particles = [];
 const trailParts = [];
 let trailTimer = 0;
 
+/* ═══ ENEMY STATE ═══ */
+let enemyCube = null;
+let enemyGridPos = { x: 0, y: 0, z: 0 };
+let enemyIsRolling = false;
+let enemyAnimStartTime = 0;
+let enemyAnimStartPos = new THREE.Vector3();
+let enemyAnimEndPos = new THREE.Vector3();
+let enemyAnimStartQuat = new THREE.Quaternion();
+let enemyAnimDeltaQuat = new THREE.Quaternion();
+let enemyMoveTimer = 0;
+const ENEMY_MOVE_INTERVAL = 0.38;
+let enemyHue = 0;
+
+/* ═══ LIVES STATE ═══ */
+let playerLives = 3;
+const MAX_LIVES = 3;
+let playerInvincible = false;
+let playerInvincibleTimer = 0;
+const PLAYER_INVINCIBLE_DURATION = 2.2;
+
 /* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR STATE
    ═══════════════════════════════════════════════════════════ */
@@ -126,6 +146,8 @@ function clearLevel() {
   });
   if (playerCube) { worldGroup.remove(playerCube); playerCube = null; }
   if (exitRing) { worldGroup.remove(exitRing); exitRing = null; }
+  if (enemyCube) { worldGroup.remove(enemyCube); enemyCube = null; }
+  enemyIsRolling = false;
   particles.length = 0; trailParts.length = 0;
 
   movingPlatformsList.forEach(mp => mp.dispose());
@@ -242,6 +264,20 @@ function buildLevel3D(level3D) {
   playerCube.castShadow = true; playerCube.receiveShadow = true;
   worldGroup.add(playerCube);
 
+  // Enemy – spawns only during actual gameplay (not pure editor mode)
+  if (!isEditMode || isPlaytesting) {
+    const enemyMat = new THREE.MeshStandardMaterial({ roughness: 0.22, metalness: 0.05, emissiveIntensity: 0.9 });
+    enemyCube = new THREE.Mesh(geoCube, enemyMat);
+    enemyCube.castShadow = true; enemyCube.receiveShadow = true;
+    const spawnPos = findEnemySpawnPos();
+    enemyGridPos = { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z };
+    enemyCube.position.copy(getPlayerWorldPos(enemyGridPos.x, enemyGridPos.y, enemyGridPos.z, false));
+    enemyMoveTimer = 1.5;
+    worldGroup.add(enemyCube);
+  }
+  playerInvincible = false;
+  playerInvincibleTimer = 0;
+
   cameraTarget.copy(playerCube.position);
   cameraLookAt.copy(playerCube.position);
 
@@ -256,6 +292,7 @@ function buildLevel3D(level3D) {
 
   spawnEntranceParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
   updatePressurePlates();
+  updateLivesUI();
   updateEditorSlicing();
 }
 
@@ -1552,6 +1589,7 @@ function updateEditorSlicing() {
 
 function loadDemoLevel() {
   isCustomLevel = true;
+  playerLives = MAX_LIVES;
   activeLevel = deserializeLevel(JSON.stringify(DEMO_LEVEL));
   document.getElementById('level-name-input').value = activeLevel.name;
   document.getElementById('world-select').value = activeLevel.world;
@@ -2021,6 +2059,7 @@ let savedEditorLevel = null;
 function enterPlaytestMode() {
   isPlaytesting = true;
   isPainting = false;
+  playerLives = MAX_LIVES;
   savedEditorLevel = serializeLevel(activeLevel); // Save design snapshot
 
   document.getElementById('editor-toolbox').style.display = 'none';
@@ -2092,6 +2131,7 @@ function adjustEditHeight(val) {
    ═══════════════════════════════════════════════════════════ */
 function loadPreMadeLevel(idx) {
   isCustomLevel = false;
+  playerLives = MAX_LIVES;
   const flatLvl = LEVELS[idx];
   const lvl3D = convertTo3D(flatLvl);
   buildLevel3D(lvl3D);
@@ -2540,6 +2580,131 @@ document.getElementById('btn-modal-load').addEventListener('click', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════
+   ENEMY AI & LIVES
+   ═══════════════════════════════════════════════════════════ */
+function getEnemyMoveTargetY(fromX, fromY, fromZ, toX, toZ) {
+  const colBlocks = getBlocksInColumn(toX, toZ);
+  const currentCeiling = getBlocksInColumn(fromX, fromZ).find(b => b.y === fromY + 1);
+  const stepUp   = colBlocks.find(b => b.y === fromY + 1);
+  const sameLevel = colBlocks.find(b => b.y === fromY);
+  const stepDown  = colBlocks.find(b => b.y === fromY - 1);
+
+  if (stepUp) {
+    if (!colBlocks.find(b => b.y === fromY + 2) && !currentCeiling) return fromY + 1;
+    return null;
+  }
+  if (sameLevel) {
+    if (!colBlocks.find(b => b.y === fromY + 1)) return fromY;
+    return null;
+  }
+  if (stepDown) {
+    if (!colBlocks.find(b => b.y === fromY)) return fromY - 1;
+    return null;
+  }
+  return null; // void – enemy doesn't fall
+}
+
+function enemyBFS() {
+  if (!enemyCube) return null;
+  const fromX = enemyGridPos.x, fromY = enemyGridPos.y, fromZ = enemyGridPos.z;
+  const toX = playerGridPos.x, toZ = playerGridPos.z;
+  if (fromX === toX && fromZ === toZ) return null;
+
+  const visited = new Set();
+  visited.add(`${fromX},${fromY},${fromZ}`);
+  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
+  const queue = [];
+
+  for (const {dx, dz} of dirs) {
+    const nx = fromX + dx, nz = fromZ + dz;
+    const ny = getEnemyMoveTargetY(fromX, fromY, fromZ, nx, nz);
+    if (ny === null) continue;
+    const key = `${nx},${ny},${nz}`;
+    if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, first: {dx, dz} }); }
+  }
+
+  let guard = 0;
+  while (queue.length > 0 && guard++ < 3000) {
+    const { x, y, z, first } = queue.shift();
+    if (x === toX && z === toZ) return first;
+    for (const {dx, dz} of dirs) {
+      const nx = x + dx, nz = z + dz;
+      const ny = getEnemyMoveTargetY(x, y, z, nx, nz);
+      if (ny === null) continue;
+      const key = `${nx},${ny},${nz}`;
+      if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, first }); }
+    }
+  }
+  return null;
+}
+
+function findEnemySpawnPos() {
+  // BFS from player start – pick the most distant reachable cell (not exit, not start)
+  const sx = playerGridPos.x, sy = playerGridPos.y, sz = playerGridPos.z;
+  const visited = new Set();
+  visited.add(`${sx},${sy},${sz}`);
+  const queue = [{ x: sx, y: sy, z: sz, dist: 0 }];
+  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
+  let best = { x: exitPos.x, y: exitPos.y, z: exitPos.z, dist: 0 };
+
+  while (queue.length > 0) {
+    const { x, y, z, dist } = queue.shift();
+    const isSpecial = (x === exitPos.x && z === exitPos.z) || (x === sx && z === sz);
+    if (!isSpecial && dist > best.dist) best = { x, y, z, dist };
+    for (const {dx, dz} of dirs) {
+      const nx = x + dx, nz = z + dz;
+      const ny = getEnemyMoveTargetY(x, y, z, nx, nz);
+      if (ny === null) continue;
+      const key = `${nx},${ny},${nz}`;
+      if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, dist: dist + 1 }); }
+    }
+  }
+  return best;
+}
+
+function startEnemyRoll(dx, dz) {
+  const toGX = enemyGridPos.x + dx, toGZ = enemyGridPos.z + dz;
+  const ny = getEnemyMoveTargetY(enemyGridPos.x, enemyGridPos.y, enemyGridPos.z, toGX, toGZ);
+  if (ny === null) return;
+
+  enemyIsRolling = true;
+  enemyAnimStartTime = performance.now() / 1000;
+  enemyAnimStartPos.copy(enemyCube.position);
+  enemyAnimEndPos.copy(getPlayerWorldPos(toGX, ny, toGZ, false));
+  enemyAnimStartQuat.copy(enemyCube.quaternion);
+
+  const axis = new THREE.Vector3(dz, 0, -dx).normalize();
+  enemyAnimDeltaQuat.setFromAxisAngle(axis, Math.PI / 2);
+
+  enemyGridPos.x = toGX;
+  enemyGridPos.y = ny;
+  enemyGridPos.z = toGZ;
+}
+
+function loseLife() {
+  if (playerInvincible) return;
+  playerLives--;
+  const isGameOver = playerLives <= 0;
+  if (isGameOver) playerLives = MAX_LIVES;
+  updateLivesUI();
+  respawnPlayer(); // resets level + shows LEVEL RESTART
+  // Override message and set invincibility AFTER respawn
+  playerInvincible = true;
+  playerInvincibleTimer = PLAYER_INVINCIBLE_DURATION;
+  showMessage(isGameOver ? 'GAME OVER!' : `LIFE LOST — ${playerLives} LEFT`, isGameOver ? 2.2 : 1.5);
+}
+
+function updateLivesUI() {
+  const el = document.getElementById('lives-display');
+  if (!el) return;
+  let html = '';
+  for (let i = 0; i < MAX_LIVES; i++) {
+    html += `<span class="life-heart${i < playerLives ? ' active' : ''}">♥</span>`;
+  }
+  el.innerHTML = html;
+}
+
+/* ═══════════════════════════════════════════════════════════
    ANIMATION & RENDER LOOP
    ═══════════════════════════════════════════════════════════ */
 const clock = new THREE.Clock();
@@ -2707,6 +2872,66 @@ function animate(timestamp) {
         }
       }
     }
+
+    // ─── ENEMY ───────────────────────────────────────────────
+    if (enemyCube) {
+      // Rainbow color cycle
+      enemyHue = (enemyHue + dt * 0.55) % 1.0;
+      enemyCube.material.color.setHSL(enemyHue, 1.0, 0.52);
+      enemyCube.material.emissive.setHSL(enemyHue, 1.0, 0.38);
+
+      // Roll animation (same math as player)
+      if (enemyIsRolling) {
+        const eElapsed = now - enemyAnimStartTime;
+        const eDur = ROLL_DUR_NORMAL * 0.72;
+        let et = Math.min(eElapsed / eDur, 1.0);
+        et = 1 - Math.pow(1 - et, 2.5);
+
+        const ePos = new THREE.Vector3().lerpVectors(enemyAnimStartPos, enemyAnimEndPos, et);
+        ePos.y += CUBE_S * 0.25 * Math.sin(Math.PI * et);
+        enemyCube.position.copy(ePos);
+
+        const eQuat = enemyAnimStartQuat.clone();
+        eQuat.slerp(new THREE.Quaternion().multiplyQuaternions(enemyAnimDeltaQuat, enemyAnimStartQuat), et);
+        enemyCube.quaternion.copy(eQuat);
+
+        if (eElapsed >= eDur) {
+          enemyCube.position.copy(enemyAnimEndPos);
+          enemyCube.quaternion.copy(new THREE.Quaternion().multiplyQuaternions(enemyAnimDeltaQuat, enemyAnimStartQuat));
+          enemyIsRolling = false;
+        }
+      }
+
+      // Pathfinding movement
+      if (!enemyIsRolling && !isLevelComplete) {
+        enemyMoveTimer -= dt;
+        if (enemyMoveTimer <= 0) {
+          enemyMoveTimer = ENEMY_MOVE_INTERVAL;
+          const step = enemyBFS();
+          if (step) startEnemyRoll(step.dx, step.dz);
+        }
+      }
+
+      // Collision with player
+      if (!playerInvincible && !isLevelComplete && playerCube) {
+        const sameCell = playerGridPos.x === enemyGridPos.x &&
+                         playerGridPos.y === enemyGridPos.y &&
+                         playerGridPos.z === enemyGridPos.z;
+        const touching = playerCube.position.distanceTo(enemyCube.position) < CUBE_S * 1.05;
+        if (sameCell || touching) loseLife();
+      }
+    }
+
+    // Player invincibility blink
+    if (playerInvincible && playerCube) {
+      playerInvincibleTimer -= dt;
+      playerCube.visible = Math.floor(playerInvincibleTimer * 9) % 2 === 0;
+      if (playerInvincibleTimer <= 0) {
+        playerInvincible = false;
+        playerCube.visible = true;
+      }
+    }
+    // ─── END ENEMY ───────────────────────────────────────────
 
     // Camera targets follow player
     if (!isRolling && !isFalling && playerCube) cameraTarget.lerp(playerCube.position, CAM_LERP);

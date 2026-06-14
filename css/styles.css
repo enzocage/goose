@@ -26,6 +26,10 @@
   #level-number { font-size:38px; font-weight:200; color:var(--text);
     letter-spacing:-0.02em; line-height:1; }
   #score-box { text-align:right; display:flex; flex-direction:column; gap:8px; }
+  #lives-display { display:flex; gap:5px; justify-content:flex-end; align-items:center; }
+  .life-heart { font-size:22px; line-height:1; color:rgba(255,51,85,0.2);
+    transition:color 0.25s, text-shadow 0.25s; }
+  .life-heart.active { color:#ff3355; text-shadow:0 0 10px #ff3355, 0 0 22px rgba(255,51,85,0.35); }
   #prism-display { display:flex; flex-direction:column; align-items:flex-end; }
   #prism-count { font-size:30px; font-weight:200; color:var(--gold); letter-spacing:-0.02em; }
   #prism-label { font-size:10px; letter-spacing:0.2em; text-transform:uppercase;
