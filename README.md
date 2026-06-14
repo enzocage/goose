@@ -1,6 +1,6 @@
 # 🟧 GOOSE — 3D Puzzle-Platformer & Level Editor
 
-![GOOSE](gfx/title.jpg)
+![GOOSE](gfx/title.gif)
 
 Ein immersiver 3D-Puzzle-Platformer im Browser, gebaut mit **Three.js** und einer maßgeschneiderten **generativen Web Audio Synthesizer-Engine**. Steuere deinen Würfel durch komplexe, mehrdimensionale Welten, schrumpfe mit dem Mini-Prisma, um enge Tunnel zu durchqueren, oder baue deine eigenen Level mit dem integrierten Minecraft-ähnlichen 3D-Editor und teile sie.
 
