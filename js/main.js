@@ -1930,9 +1930,11 @@ function handleEditorClick(e) {
       const block = activeLevel.blocks.get(hit.hitKey);
       if (block && (block.type === 'switch' || block.type === 'pressureplate' || block.type === 'teleporter' || block.type === 'moving')) {
         linkerSourceKey = hit.hitKey;
-        if (block.type === 'moving') showMessage('PLATFORM SELECTED — CLICK DESTINATION CELL');
+        const srcGroup = block.properties && block.properties.group;
+        const srcGrouped = srcGroup !== undefined && srcGroup !== null;
+        if (block.type === 'moving') showMessage(srcGrouped ? 'OBJECT SELECTED — CLICK DESTINATION CELL' : 'PLATFORM SELECTED — CLICK DESTINATION CELL');
         else if (block.type === 'teleporter') showMessage('PORTAL SELECTED — CLICK SECOND PORTAL');
-        else showMessage('SOURCE SELECTED — CLICK A BRIDGE OR MOVING PLATFORM');
+        else showMessage(srcGrouped ? 'OBJECT SOURCE — CLICK ANY ELEMENT OF TARGET OBJECT' : 'SOURCE SELECTED — CLICK A BRIDGE, MOVER OR GROUPED BLOCK');
       } else {
         showMessage('SELECT A SWITCH, PLATE, PORTAL OR MOVING PLATFORM', 1.6);
       }
@@ -1943,37 +1945,56 @@ function handleEditorClick(e) {
     const target = hit.hitKey ? activeLevel.blocks.get(hit.hitKey) : null;
     let linked = false;
     if (source && source.type === 'moving' && linkerSourceKey !== hit.hitKey) {
-      // Moving platforms may target any cell, including empty grid cells
-      source.properties.targetX = target ? target.x : hit.x;
-      source.properties.targetY = target ? target.y : hit.y;
-      source.properties.targetZ = target ? target.z : hit.z;
-      // If this mover is part of a compound object, the whole object travels.
+      // Moving platforms may target any cell, including empty grid cells.
+      // For compound groups: apply the same displacement vector to every
+      // mover in the group so the whole object travels as one piece.
+      const destX = target ? target.x : hit.x;
+      const destY = target ? target.y : hit.y;
+      const destZ = target ? target.z : hit.z;
+      const dispX = destX - source.x, dispY = destY - source.y, dispZ = destZ - source.z;
+      source.properties.targetX = destX;
+      source.properties.targetY = destY;
+      source.properties.targetZ = destZ;
       const g = source.properties.group;
-      let count = 1;
+      let moverCount = 1;
       if (g !== undefined && g !== null) {
-        count = [...activeLevel.blocks.values()].filter(b => b.properties && b.properties.group === g).length;
-      }
-      showMessage(count > 1 ? `OBJECT DESTINATION SET (${count} BLOCKS)` : 'PLATFORM DESTINATION SET');
-      linked = true;
-    } else if (source && target && linkerSourceKey !== hit.hitKey) {
-      if ((source.type === 'switch' || source.type === 'pressureplate') && (target.type === 'bridge' || target.type === 'moving')) {
-        // If the target belongs to a compound object, link every triggerable
-        // member of that group — not just the block that was clicked.
-        const groupId = target.properties && target.properties.group;
-        let members = [target];
-        if (groupId !== undefined && groupId !== null) {
-          members = [...activeLevel.blocks.values()].filter(b =>
-            b.properties && b.properties.group === groupId &&
-            (b.type === 'bridge' || b.type === 'moving'));
-        }
-        members.forEach(m => {
-          const tk = `${m.x},${m.y},${m.z}`;
-          if (!activeLevel.links.some(l => l.type === 'switch-trigger' && l.from === linkerSourceKey && l.to === tk)) {
-            activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: tk });
+        activeLevel.blocks.forEach((b, k) => {
+          if (b.properties && b.properties.group === g && b.type === 'moving' && k !== linkerSourceKey) {
+            b.properties.targetX = b.x + dispX;
+            b.properties.targetY = b.y + dispY;
+            b.properties.targetZ = b.z + dispZ;
+            moverCount++;
           }
         });
-        showMessage(members.length > 1 ? `OBJECT TRIGGER LINKED (${members.length} BLOCKS)` : 'TRIGGER LINKED');
-        linked = true;
+      }
+      showMessage(moverCount > 1 ? `OBJECT DESTINATION SET (${moverCount} MOVERS)` : 'PLATFORM DESTINATION SET');
+      linked = true;
+    } else if (source && target && linkerSourceKey !== hit.hitKey) {
+      if (source.type === 'switch' || source.type === 'pressureplate') {
+        // Accept any block as target — if it belongs to a compound group,
+        // find all triggerable (bridge / moving) members of that group.
+        // This lets the user click on ANY element of a grouped object.
+        const groupId = target.properties && target.properties.group;
+        let members = [];
+        if (target.type === 'bridge' || target.type === 'moving') members = [target];
+        if (groupId !== undefined && groupId !== null) {
+          const groupLinkable = [...activeLevel.blocks.values()].filter(b =>
+            b.properties && b.properties.group === groupId &&
+            (b.type === 'bridge' || b.type === 'moving'));
+          if (groupLinkable.length > 0) members = groupLinkable;
+        }
+        if (members.length > 0) {
+          members.forEach(m => {
+            const tk = `${m.x},${m.y},${m.z}`;
+            if (!activeLevel.links.some(l => l.type === 'switch-trigger' && l.from === linkerSourceKey && l.to === tk)) {
+              activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: tk });
+            }
+          });
+          showMessage(members.length > 1 ? `OBJECT TRIGGER LINKED (${members.length} ELEMENTS)` : 'TRIGGER LINKED');
+          linked = true;
+        } else {
+          showMessage('INVALID LINK TARGET — CLICK A BRIDGE, MOVER OR GROUPED OBJECT', 1.6);
+        }
       } else if (source.type === 'teleporter' && target.type === 'teleporter') {
         activeLevel.links.push({ type: 'teleporter-link', k1: linkerSourceKey, k2: hit.hitKey });
         showMessage('PORTALS LINKED');
