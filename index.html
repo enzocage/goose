@@ -263,6 +263,58 @@
   </div>
 </div>
 
+<!-- Title card shown for ~2s at startup -->
+<div id="title-splash"><img src="gfx/title.jpg" alt="GOOSE"></div>
+
+<!-- Startup credits splash (fades in/out briefly) -->
+<div id="intro-splash">
+  <div class="intro-title">GOOSE</div>
+  <div class="intro-line">coding by <b>Felix Schmidt</b></div>
+  <div class="intro-line">soundtrack <a href="https://audiomack.com/enzocage/album/carbon" target="_blank" rel="noopener" class="intro-link">Carbon</a> by <b>Enzo Cage</b></div>
+  <div class="intro-hint">press <span class="kbd">H</span> for help</div>
+</div>
+
+<!-- Persistent help hint -->
+<button id="help-hint">press <span class="kbd">H</span> for help</button>
+
+<!-- Help overlay (toggle with H) -->
+<div id="help-overlay">
+  <div id="help-card">
+    <div id="help-head">
+      <div class="help-title">GOOSE — Help</div>
+      <button id="help-close" title="Close (H / Esc)">✕</button>
+    </div>
+    <div id="help-body">
+      <section class="help-sec">
+        <h3>How to play</h3>
+        <p>Roll your cube across the world to reach the glowing green <b>Exit</b>. Collect every <b>Prism</b> along the way. Don't roll into hazards or off the edge into the void — press <span class="kbd">R</span> to restart anytime.</p>
+      </section>
+
+      <section class="help-sec">
+        <h3>Controls</h3>
+        <div class="help-keys">
+          <div><span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> / <span class="kbd">←</span><span class="kbd">↑</span><span class="kbd">↓</span><span class="kbd">→</span> — roll (hold to repeat every 300&nbsp;ms)</div>
+          <div><span class="kbd">R</span> — restart level</div>
+          <div><span class="kbd">H</span> — toggle this help</div>
+          <div>♪ icon (bottom-left) — background music player</div>
+          <div><b>Load Level</b> / <b>Editor</b> (top) — pick a level or build your own</div>
+        </div>
+      </section>
+
+      <section class="help-sec">
+        <h3>Gameplay elements</h3>
+        <div id="help-elements"></div>
+      </section>
+
+      <section class="help-sec help-credits">
+        <h3>Credits</h3>
+        <p>Coding &amp; game design by <b>Felix Schmidt</b>.</p>
+        <p>Soundtrack: <a href="https://audiomack.com/enzocage/album/carbon" target="_blank" rel="noopener" class="intro-link">Carbon</a> by <b>Enzo Cage</b> — listen on Audiomack.</p>
+      </section>
+    </div>
+  </div>
+</div>
+
 <!-- Subtle background music player (hidden behind a toggle icon) -->
 <div id="music-ui">
   <div id="music-panel">

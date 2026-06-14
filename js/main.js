@@ -41,6 +41,7 @@ let isFalling = false;
 let isLevelComplete = false;
 let isMini = false;
 let isCustomLevel = false;
+let isHelpOpen = false;
 
 let balanceDir = null;
 let balanceTimer = 0;
@@ -2113,6 +2114,10 @@ window.addEventListener('keydown', (e) => {
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return;
 
+  // Help overlay toggles with H from anywhere; while open it swallows other keys.
+  if (e.code === 'KeyH') { setHelpOpen(!isHelpOpen); return; }
+  if (isHelpOpen) { if (e.code === 'Escape') setHelpOpen(false); return; }
+
   if (isBalancing) {
     let rollBack = false;
     if (lastMoveDir.x === 1 && (e.code === 'ArrowLeft' || e.code === 'KeyA')) rollBack = true;
@@ -2801,6 +2806,65 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+/* ═══════════════════════════════════════════════════════════
+   HELP OVERLAY + STARTUP SPLASH
+   ═══════════════════════════════════════════════════════════ */
+const HELP_ELEMENTS = [
+  { name:'Normal',         swatch:'background:#2a2a38;border:1px solid #555577;', desc:'Solid ground — roll across freely.' },
+  { name:'Fragile',        swatch:'background:#442222;border:1px solid #883333;', desc:'Cracks and collapses moments after you roll off it. No going back.' },
+  { name:'Ice',            swatch:'background:#335566;border:1px solid #6699aa;', desc:'Slippery — you keep sliding the same direction until something stops you.' },
+  { name:'Switch',         swatch:'background:#333344;border:1px solid #6677cc;', desc:'Roll onto it to toggle its linked bridges or moving platforms on/off.' },
+  { name:'Bridge',         swatch:'background:#334455;border:1px solid #335577;height:10px;margin-top:10px;', desc:'A thin platform that appears or vanishes when its switch is triggered.' },
+  { name:'Portal',         swatch:'background:#2a2244;border:1px solid #8855dd;', desc:'Teleports you instantly to its linked portal.' },
+  { name:'Moving',         swatch:'background:#445544;border:1px solid #44aa55;', desc:'Travels between two points and carries you rigidly while you stand on it. It can also shove you out of its path.' },
+  { name:'Crate',          swatch:'background:#8b5a2b;border:1px solid #ffaa44;', desc:'Push it one cell by rolling into it — if the space behind is clear.' },
+  { name:'Pressure Plate', swatch:'background:#2244aa;border:1px solid #3366ff;', desc:'A momentary switch — only active while something rests on it.' },
+  { name:'Hazard',         swatch:'background:#221111;border:1px solid #ff3355;', desc:'Deadly. Touching it sends you back to the start.' },
+  { name:'Shaker',         swatch:'background:#554444;border:1px solid #887777;', desc:'Trembles and crumbles away right after you step on it.' },
+  { name:'Booster',        swatch:'background:#223322;border:1px solid #ffcc00;', desc:'Speed pad — your next few moves are much faster.' },
+  { name:'Start',          swatch:'background:#ff6600;border-radius:50%;', desc:'Your spawn position.' },
+  { name:'Exit',           swatch:'background:#00ffaa;border-radius:50%;', desc:'The goal ring — reach it (with every prism) to clear the level.' },
+  { name:'Prism',          swatch:'background:#ffdd44;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);', desc:'Collect them all — usually required to finish a level.' },
+  { name:'Mini-Prism',     swatch:'background:#00ccff;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.7);', desc:'Shrinks you for a short time — climb walls and squeeze under bridges.' },
+];
+
+(function setupHelp() {
+  const elGrid = document.getElementById('help-elements');
+  if (elGrid) {
+    HELP_ELEMENTS.forEach(e => {
+      const card = document.createElement('div');
+      card.className = 'help-el';
+      card.innerHTML = `<span class="help-el-swatch" style="${e.swatch}"></span>` +
+        `<div class="help-el-text"><div class="help-el-name">${e.name}</div><div class="help-el-desc">${e.desc}</div></div>`;
+      elGrid.appendChild(card);
+    });
+  }
+  const overlay = document.getElementById('help-overlay');
+  document.getElementById('help-close')?.addEventListener('click', () => setHelpOpen(false));
+  document.getElementById('help-hint')?.addEventListener('click', () => setHelpOpen(true));
+  overlay?.addEventListener('click', (e) => { if (e.target === overlay) setHelpOpen(false); });
+
+  // Title card: show for ~2 seconds, then fade out.
+  const title = document.getElementById('title-splash');
+  if (title) {
+    setTimeout(() => title.classList.add('hide'), 2000);
+    setTimeout(() => { title.style.display = 'none'; }, 2700);
+  }
+
+  // Briefly fade the credits splash in, then out.
+  const splash = document.getElementById('intro-splash');
+  if (splash) {
+    requestAnimationFrame(() => splash.classList.add('show'));
+    setTimeout(() => splash.classList.remove('show'), 5200);
+    setTimeout(() => { splash.style.display = 'none'; }, 6100);
+  }
+})();
+
+function setHelpOpen(open) {
+  isHelpOpen = open;
+  document.getElementById('help-overlay')?.classList.toggle('open', open);
+}
 
 // START
 loadPreMadeLevel(0);
