@@ -1559,8 +1559,11 @@ function loadDemoLevel() {
   showMessage('DEMO LEVEL LOADED');
 }
 
+let libraryListToken = 0; // guards async folder-level appends against stale refreshes
+
 function updateLibraryList() {
   const list = document.getElementById('custom-levels-list');
+  const token = ++libraryListToken;
   list.innerHTML = '';
   // Built-in demo level showcasing every gameplay element
   const demoItem = document.createElement('div');
@@ -1598,6 +1601,57 @@ function updateLibraryList() {
     });
     list.appendChild(div);
   });
+  // Levels shipped as files in the /level folder (read-only, no delete button)
+  loadFolderLevels(list, token);
+}
+
+// Fetch level files from the /level folder and add them to the Load Level list.
+// Uses level/manifest.json (array of filenames) if present; otherwise probes
+// 1.json, 2.json, … until a file is missing (contiguous numbering).
+async function loadFolderLevels(list, token) {
+  let files = [];
+  try {
+    const res = await fetch('level/manifest.json', { cache: 'no-store' });
+    if (res.ok) {
+      const m = await res.json();
+      if (Array.isArray(m)) files = m.map(f => (typeof f === 'string' ? f : f.file)).filter(Boolean);
+    }
+  } catch (e) { /* no manifest */ }
+  if (!files.length) {
+    for (let i = 1; i <= 99; i++) {
+      try {
+        const r = await fetch(`level/${i}.json`, { cache: 'no-store' });
+        if (!r.ok) break;
+        files.push(`${i}.json`);
+      } catch (e) { break; }
+    }
+  }
+  for (const file of files) {
+    if (token !== libraryListToken) return; // a newer refresh superseded us
+    let jsonStr;
+    try {
+      const r = await fetch(`level/${file}`, { cache: 'no-store' });
+      if (!r.ok) continue;
+      jsonStr = await r.text();
+    } catch (e) { continue; }
+    let data;
+    try { data = JSON.parse(jsonStr); } catch (e) { continue; }
+    if (token !== libraryListToken) return;
+    const div = document.createElement('div');
+    div.className = 'library-item';
+    div.innerHTML = `<span style="color:var(--accent2);">📁 ${data.name || file}</span>`;
+    div.querySelector('span').addEventListener('click', () => {
+      isCustomLevel = true;
+      activeLevel = deserializeLevel(jsonStr);
+      document.getElementById('level-name-input').value = activeLevel.name;
+      document.getElementById('world-select').value = activeLevel.world;
+      buildLevel3D(activeLevel);
+      drawEditorWires();
+      showMessage('LEVEL LOADED');
+      document.getElementById('editor-library-panel').style.display = 'none';
+    });
+    list.appendChild(div);
+  }
 }
 
 function drawEditorWires() {
