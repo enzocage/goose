@@ -1455,6 +1455,310 @@ function generateAILabyrinth() {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   AI LEVEL GENERATOR 2 — "ARCHITECT" (difficulty-driven)
+   Builds a guaranteed-solvable level scaled to a 1..10 difficulty, using all
+   gameplay elements. See docs/ai-generator-2-concept.md for the design.
+   ═══════════════════════════════════════════════════════════ */
+
+// Difficulty 1..10 → all the knobs that scale together.
+function architectParams(d) {
+  const t = (Math.max(1, Math.min(10, d)) - 1) / 9; // 0..1
+  const li = (a, b) => Math.round(a + (b - a) * t);
+  const lf = (a, b) => a + (b - a) * t;
+  return {
+    halfSize: li(5, 17),          // grid extends ±halfSize → up to ~34 wide
+    backboneLength: li(14, 150),
+    maxFloors: li(0, 5),
+    floorChance: lf(0.05, 0.40),
+    branches: li(1, 16),
+    branchLen: li(2, 6),
+    switchGates: li(0, 3),
+    teleporters: li(0, 3),
+    movers: li(0, 4),
+    enemies: li(0, 5),
+    prisms: li(3, 14),
+    miniprisms: li(0, 8),
+    fragileChance: lf(0.0, 0.30),
+    iceChance: lf(0.02, 0.22),
+    shakerChance: lf(0.0, 0.22),
+    dangerChance: lf(0.0, 0.20),
+    boosterChance: lf(0.0, 0.08),
+    parFactor: lf(1.3, 0.65),
+  };
+}
+
+// Column index "x,z" → Map(y → type), for fast reachability queries.
+function archColIndex(blocks) {
+  const idx = new Map();
+  blocks.forEach(b => {
+    const ck = `${b.x},${b.z}`;
+    if (!idx.has(ck)) idx.set(ck, new Map());
+    idx.get(ck).set(b.y, b.type);
+  });
+  return idx;
+}
+
+// One orthogonal player step (mirrors getEnemyMoveTargetY): returns the landing
+// Y when moving from (fromX,fromY,fromZ) into column (toX,toZ), else null.
+// `danger` tiles are treated as lethal walls (never standable).
+function archStepY(idx, fromX, fromY, fromZ, toX, toZ) {
+  const toCol = idx.get(`${toX},${toZ}`);
+  const fromCol = idx.get(`${fromX},${fromZ}`);
+  if (!toCol) return null;
+  const okType = y => toCol.get(y) !== 'danger';
+  if (toCol.has(fromY + 1)) { // step up
+    if (okType(fromY + 1) && !toCol.has(fromY + 2) && !(fromCol && fromCol.has(fromY + 1))) return fromY + 1;
+    return null;
+  }
+  if (toCol.has(fromY)) {     // same level
+    if (okType(fromY) && !toCol.has(fromY + 1)) return fromY;
+    return null;
+  }
+  if (toCol.has(fromY - 1)) { // step down
+    if (okType(fromY - 1) && !toCol.has(fromY)) return fromY - 1;
+    return null;
+  }
+  return null;
+}
+
+// Flood-fill of all cells reachable from `start` under player movement rules.
+function archReachable(blocks, start) {
+  const idx = archColIndex(blocks);
+  const seen = new Set([`${start.x},${start.y},${start.z}`]);
+  const q = [{ x: start.x, y: start.y, z: start.z }];
+  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
+  let guard = 0;
+  while (q.length && guard++ < 200000) {
+    const c = q.shift();
+    for (const { dx, dz } of dirs) {
+      const nx = c.x + dx, nz = c.z + dz;
+      const ny = archStepY(idx, c.x, c.y, c.z, nx, nz);
+      if (ny === null) continue;
+      const key = `${nx},${ny},${nz}`;
+      if (!seen.has(key)) { seen.add(key); q.push({ x: nx, y: ny, z: nz }); }
+    }
+  }
+  return seen;
+}
+
+function generateArchitectLevel(difficulty) {
+  const P = architectParams(difficulty);
+  const lvl = new Level3D();
+  lvl.name = `Architect · Lvl ${difficulty}`;
+  lvl.world = Math.min(4, Math.floor((difficulty - 1) / 2));
+
+  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
+  const occ = new Map(); // "x,z" → y (one height per column keeps the path ceiling-free)
+  const setBlock = (c, type, props = {}) =>
+    lvl.blocks.set(`${c.x},${c.y},${c.z}`, { x: c.x, y: c.y, z: c.z, type, properties: props });
+  const inBounds = (x, z) => Math.abs(x) <= P.halfSize && Math.abs(z) <= P.halfSize;
+
+  // ── 1) Backbone: a winding, guaranteed-walkable network from start outward.
+  // Backtracking keeps the walk from stalling in an early dead end, so high
+  // difficulties reliably reach their target size. Every cell stays connected,
+  // at most one height per column → the whole structure is always walkable.
+  const path = [{ x: 0, y: 0, z: 0 }];
+  occ.set('0,0', 0);
+  let cx = 0, cy = 0, cz = 0, heading = dirs[0];
+  let stepsLeft = P.backboneLength;
+  const roomAt = (x, z) => dirs.some(d => inBounds(x + d.dx, z + d.dz) && !occ.has(`${x + d.dx},${z + d.dz}`));
+  while (stepsLeft > 0) {
+    const options = dirs.filter(d => inBounds(cx + d.dx, cz + d.dz) && !occ.has(`${cx + d.dx},${cz + d.dz}`));
+    if (!options.length) {
+      // Dead end — hop back to an earlier cell that still has open neighbours.
+      let jumped = false;
+      for (let bi = path.length - 1; bi >= 0; bi--) {
+        if (roomAt(path[bi].x, path[bi].z)) { cx = path[bi].x; cy = path[bi].y; cz = path[bi].z; heading = dirs[Math.floor(Math.random() * 4)]; jumped = true; break; }
+      }
+      if (!jumped) break; // grid genuinely full
+      continue;
+    }
+    const straight = options.find(d => d.dx === heading.dx && d.dz === heading.dz);
+    heading = (straight && Math.random() < 0.55) ? straight : options[Math.floor(Math.random() * options.length)];
+    const nx = cx + heading.dx, nz = cz + heading.dz;
+    let ny = cy;
+    if (P.maxFloors > 0 && Math.random() < P.floorChance) {
+      const cand = cy + (Math.random() < 0.5 ? 1 : -1);
+      if (cand >= 0 && cand <= P.maxFloors) ny = cand;
+    }
+    occ.set(`${nx},${nz}`, ny);
+    path.push({ x: nx, y: ny, z: nz });
+    cx = nx; cy = ny; cz = nz; stepsLeft--;
+  }
+  path.forEach(c => setBlock(c, 'normal'));
+  lvl.start = { ...path[0] };
+  // Exit = farthest reachable backbone cell (height weighted), for a long route.
+  let exitCell = path[0], maxD = 0;
+  path.forEach(c => { const d = Math.abs(c.x) + Math.abs(c.z) + c.y * 2; if (d > maxD) { maxD = d; exitCell = c; } });
+  lvl.exit = { ...exitCell };
+  const startKey = `${path[0].x},${path[0].y},${path[0].z}`;
+  const exitKey = `${lvl.exit.x},${lvl.exit.y},${lvl.exit.z}`;
+
+  // ── 2) Branches & rooms (off-path, for bonus content and hazards) ──
+  const branchCells = [];
+  for (let b = 0; b < P.branches; b++) {
+    const anchor = path[1 + Math.floor(Math.random() * Math.max(1, path.length - 2))];
+    let bx = anchor.x, by = anchor.y, bz = anchor.z;
+    let bdir = dirs[Math.floor(Math.random() * 4)];
+    const len = 1 + Math.floor(Math.random() * P.branchLen);
+    for (let s = 0; s < len; s++) {
+      if (Math.random() < 0.3) bdir = dirs[Math.floor(Math.random() * 4)];
+      const nx = bx + bdir.dx, nz = bz + bdir.dz;
+      if (!inBounds(nx, nz) || occ.has(`${nx},${nz}`)) break;
+      let ny = by;
+      if (P.maxFloors > 0 && Math.random() < P.floorChance * 0.6) {
+        const cand = by + (Math.random() < 0.5 ? 1 : -1);
+        if (cand >= 0 && cand <= P.maxFloors) ny = cand;
+      }
+      occ.set(`${nx},${nz}`, ny);
+      const cell = { x: nx, y: ny, z: nz };
+      setBlock(cell, 'normal');
+      branchCells.push(cell);
+      bx = nx; by = ny; bz = nz;
+    }
+  }
+
+  // ── 3) Switch-gated bridges on the backbone (switch placed before the gate) ──
+  for (let g = 0; g < P.switchGates && path.length > 9; g++) {
+    const i = 5 + Math.floor(Math.random() * (path.length - 7));
+    const k = 1 + Math.floor(Math.random() * 2);
+    const bridgeKeys = [];
+    for (let j = i; j < Math.min(i + k, path.length - 1); j++) {
+      const c = path[j], ck = `${c.x},${c.y},${c.z}`;
+      if (lvl.blocks.get(ck).type !== 'normal') continue;
+      setBlock(c, 'bridge');
+      bridgeKeys.push(ck);
+    }
+    if (!bridgeKeys.length) continue;
+    const sc = path[Math.max(1, i - 1 - Math.floor(Math.random() * 2))];
+    const sk = `${sc.x},${sc.y},${sc.z}`;
+    if (lvl.blocks.get(sk).type === 'normal') {
+      setBlock(sc, 'switch');
+      bridgeKeys.forEach(bk => lvl.links.push({ type: 'switch-trigger', from: sk, to: bk }));
+    }
+    // else: leave bridge always-on (still solvable)
+  }
+
+  // ── 4) Teleporter shortcuts between distant backbone cells ──
+  for (let t = 0; t < P.teleporters; t++) {
+    const a = path[Math.floor(Math.random() * path.length)];
+    const b = path[Math.floor(Math.random() * path.length)];
+    const ak = `${a.x},${a.y},${a.z}`, bk = `${b.x},${b.y},${b.z}`;
+    if (ak === bk || ak === startKey || bk === startKey || ak === exitKey || bk === exitKey) continue;
+    const ba = lvl.blocks.get(ak), bb = lvl.blocks.get(bk);
+    if (!ba || !bb || ba.type !== 'normal' || bb.type !== 'normal') continue;
+    ba.type = 'teleporter'; bb.type = 'teleporter';
+    lvl.links.push({ type: 'teleporter-link', k1: ak, k2: bk });
+  }
+
+  // ── 5) Moving platforms: optional bonus routes over a gap to a mini-prism ──
+  for (let m = 0; m < P.movers; m++) {
+    const anchor = path[2 + Math.floor(Math.random() * Math.max(1, path.length - 3))];
+    const d = dirs[Math.floor(Math.random() * 4)];
+    const g1 = { x: anchor.x + d.dx, y: anchor.y, z: anchor.z + d.dz };
+    const g2 = { x: anchor.x + 2 * d.dx, y: anchor.y, z: anchor.z + 2 * d.dz };
+    const plat = { x: anchor.x + 3 * d.dx, y: anchor.y, z: anchor.z + 3 * d.dz };
+    const free = c => inBounds(c.x, c.z) && !occ.has(`${c.x},${c.z}`);
+    if (!(free(g1) && free(g2) && free(plat))) continue;
+    occ.set(`${g1.x},${g1.z}`, g1.y);
+    occ.set(`${plat.x},${plat.z}`, plat.y);
+    setBlock(g1, 'moving', { targetX: g2.x, targetY: g2.y, targetZ: g2.z, speed: 1.2 });
+    setBlock(plat, 'normal');
+    lvl.prisms.set(`${plat.x},${plat.y},${plat.z}`, { type: 'miniprism' });
+  }
+
+  // ── 6) Mandatory prisms on backbone cells (always reachable) ──
+  const prismPool = path.filter(c => {
+    const k = `${c.x},${c.y},${c.z}`;
+    return k !== startKey && k !== exitKey && lvl.blocks.get(k).type === 'normal';
+  }).sort(() => 0.5 - Math.random());
+  const prismCount = Math.min(P.prisms, prismPool.length);
+  for (let i = 0; i < prismCount; i++) {
+    const c = prismPool[i];
+    lvl.prisms.set(`${c.x},${c.y},${c.z}`, { type: 'prism' });
+  }
+
+  // ── 7) Hazard styling — risk only on optional cells ──
+  // Backbone (non-critical, no prism): occasional ice / booster only.
+  path.forEach(c => {
+    const k = `${c.x},${c.y},${c.z}`;
+    if (k === startKey || k === exitKey || lvl.prisms.has(k)) return;
+    const b = lvl.blocks.get(k);
+    if (b.type !== 'normal') return;
+    if (Math.random() < P.iceChance * 0.5) b.type = 'ice';
+    else if (Math.random() < P.boosterChance) b.type = 'booster';
+  });
+  // Branch cells: fragile / shaker / danger / ice (optional routes only).
+  branchCells.forEach(c => {
+    const k = `${c.x},${c.y},${c.z}`;
+    if (lvl.prisms.has(k)) return;
+    const b = lvl.blocks.get(k);
+    if (!b || b.type !== 'normal') return;
+    const r = Math.random();
+    if (r < P.fragileChance) b.type = 'fragile';
+    else if (r < P.fragileChance + P.shakerChance) b.type = 'shaker';
+    else if (r < P.fragileChance + P.shakerChance + P.dangerChance) b.type = 'danger';
+    else if (r < P.fragileChance + P.shakerChance + P.dangerChance + P.iceChance) b.type = 'ice';
+  });
+
+  // ── 8) Bonus mini-prisms on branch ends (risky reward) ──
+  const safeBranches = branchCells.filter(c => {
+    const b = lvl.blocks.get(`${c.x},${c.y},${c.z}`);
+    return b && b.type !== 'danger';
+  }).sort(() => 0.5 - Math.random());
+  for (let i = 0; i < Math.min(P.miniprisms, safeBranches.length); i++) {
+    const c = safeBranches[i];
+    const k = `${c.x},${c.y},${c.z}`;
+    if (!lvl.prisms.has(k)) lvl.prisms.set(k, { type: 'miniprism' });
+  }
+
+  // ── 9) Enemies on far backbone cells ──
+  const farCells = path.slice(Math.floor(path.length * 0.55)).filter(c => {
+    const k = `${c.x},${c.y},${c.z}`;
+    return k !== exitKey && lvl.blocks.get(k).type === 'normal';
+  }).sort(() => 0.5 - Math.random());
+  for (let i = 0; i < Math.min(P.enemies, farCells.length); i++) {
+    const c = farCells[i];
+    lvl.enemies.set(`${c.x},${c.y},${c.z}`, {});
+  }
+
+  // ── 10) Validate solvability; repair as a safety net ──
+  // Switch-gate softlock guard: a triggered bridge is only fair if its switch
+  // can be reached WITHOUT crossing any (still-closed) triggered bridge. If not,
+  // drop the trigger so the bridge is permanently open — never a softlock.
+  const trigBridges = new Map(); // bridgeKey → switchKey
+  lvl.links.forEach(l => { if (l.type === 'switch-trigger') trigBridges.set(l.to, l.from); });
+  if (trigBridges.size) {
+    const noBridge = new Map();
+    lvl.blocks.forEach((b, k) => { if (!trigBridges.has(k)) noBridge.set(k, b); });
+    const reachNoBridge = archReachable(noBridge, lvl.start);
+    trigBridges.forEach((sk, bk) => {
+      if (!reachNoBridge.has(sk)) lvl.links = lvl.links.filter(l => !(l.type === 'switch-trigger' && l.to === bk));
+    });
+  }
+
+  let reach = archReachable(lvl.blocks, lvl.start);
+  // Drop any mandatory prism that somehow ended up unreachable.
+  [...lvl.prisms.entries()].forEach(([k, p]) => {
+    if (p.type === 'prism' && !reach.has(k)) lvl.prisms.delete(k);
+  });
+  // If the exit is blocked (shouldn't happen with a clean backbone), peel back
+  // danger tiles until it opens up.
+  let safety = 0;
+  while (!reach.has(exitKey) && safety++ < 40) {
+    let changed = false;
+    lvl.blocks.forEach(b => {
+      if (!changed && b.type === 'danger') { b.type = 'normal'; changed = true; }
+    });
+    if (!changed) break;
+    reach = archReachable(lvl.blocks, lvl.start);
+  }
+
+  lvl.par = Math.max(6, Math.round(path.length * P.parFactor + prismCount * 2));
+  return lvl;
+}
+
+/* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR IMPLEMENTATION
    ═══════════════════════════════════════════════════════════ */
 // Snapshot the current level onto the undo history before a mutating edit.
@@ -2576,6 +2880,22 @@ document.getElementById('btn-ai-generate').addEventListener('click', () => {
     buildLevel3D(lvl);
     drawEditorWires();
     showMessage('AI LABYRINTH GENERATED');
+  }
+});
+
+document.getElementById('btn-ai-architect').addEventListener('click', () => {
+  audio.init();
+  const difficulty = parseInt(document.getElementById('architect-difficulty').value, 10) || 5;
+  if (confirm(`Generate a difficulty-${difficulty} Architect level? This will overwrite your current design.`)) {
+    pushUndoSnapshot();
+    const lvl = generateArchitectLevel(difficulty);
+    activeLevel = lvl;
+    document.getElementById('level-name-input').value = lvl.name;
+    document.getElementById('world-select').value = lvl.world;
+    adjustEditHeight(-editY); // Reset edit height to 0
+    buildLevel3D(lvl);
+    drawEditorWires();
+    showMessage(`ARCHITECT LEVEL — DIFFICULTY ${difficulty}`);
   }
 });
 
