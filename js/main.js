@@ -74,23 +74,23 @@ let animStartQuat = new THREE.Quaternion();
 let animDeltaQuat = new THREE.Quaternion();
 let animAxis = new THREE.Vector3();
 let animFromEdge = false;
+// When a roll begins while riding a moving platform, the roll is anchored to
+// that platform's frame: rollCarrier is the mover and rollCarrierStart its
+// position at roll start, so the platform's motion during the roll is added on
+// top of the (straight, platform-relative) roll.
+let rollCarrier = null;
+let rollCarrierStart = new THREE.Vector3();
 
 const particles = [];
 const trailParts = [];
 let trailTimer = 0;
 
 /* ═══ ENEMY STATE ═══ */
-let enemyCube = null;
-let enemyGridPos = { x: 0, y: 0, z: 0 };
-let enemyIsRolling = false;
-let enemyAnimStartTime = 0;
-let enemyAnimStartPos = new THREE.Vector3();
-let enemyAnimEndPos = new THREE.Vector3();
-let enemyAnimStartQuat = new THREE.Quaternion();
-let enemyAnimDeltaQuat = new THREE.Quaternion();
-let enemyMoveTimer = 0;
+// Enemies are placed in the editor (Level3D.enemies) and may appear multiple
+// times. Each live enemy is its own object so several can chase at once.
+let enemies = [];              // live chasers spawned during gameplay/playtest
+let enemyMarkers = new Map();  // key -> mesh, static markers shown in pure edit mode
 const ENEMY_MOVE_INTERVAL = 0.38;
-let enemyHue = 0;
 
 /* ═══ LIVES STATE ═══ */
 let playerLives = 3;
@@ -146,13 +146,15 @@ function clearLevel() {
   });
   if (playerCube) { worldGroup.remove(playerCube); playerCube = null; }
   if (exitRing) { worldGroup.remove(exitRing); exitRing = null; }
-  if (enemyCube) { worldGroup.remove(enemyCube); enemyCube = null; }
-  enemyIsRolling = false;
+  enemies.forEach(en => { worldGroup.remove(en.cube); if (en.cube.material) en.cube.material.dispose(); });
+  enemies = [];
+  enemyMarkers.clear(); // marker meshes live in prismsGroup, disposed by the group loop above
   particles.length = 0; trailParts.length = 0;
 
   movingPlatformsList.forEach(mp => mp.dispose());
   movingPlatformsList = [];
   ridingPlatform = null;
+  rollCarrier = null;
   activeBlocks.clear();
   activePrisms.clear();
   switchMap.clear();
@@ -264,16 +266,18 @@ function buildLevel3D(level3D) {
   playerCube.castShadow = true; playerCube.receiveShadow = true;
   worldGroup.add(playerCube);
 
-  // Enemy – spawns only during actual gameplay (not pure editor mode)
+  // Enemies – placed in the editor. During gameplay/playtest each spawn point
+  // becomes a live chaser; in pure edit mode we show a static marker instead.
   if (!isEditMode || isPlaytesting) {
-    const enemyMat = new THREE.MeshStandardMaterial({ roughness: 0.22, metalness: 0.05, emissiveIntensity: 0.9 });
-    enemyCube = new THREE.Mesh(geoCube, enemyMat);
-    enemyCube.castShadow = true; enemyCube.receiveShadow = true;
-    const spawnPos = findEnemySpawnPos();
-    enemyGridPos = { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z };
-    enemyCube.position.copy(getPlayerWorldPos(enemyGridPos.x, enemyGridPos.y, enemyGridPos.z, false));
-    enemyMoveTimer = 1.5;
-    worldGroup.add(enemyCube);
+    if (level3D.enemies.size > 0) {
+      level3D.enemies.forEach((e, key) => spawnEnemy(key));
+    } else if (!isCustomLevel && !isEditMode) {
+      // Built-in campaign levels predate enemy placement — keep their original
+      // single auto-spawned chaser at the most distant reachable cell.
+      spawnEnemy(findEnemySpawnKey());
+    }
+  } else {
+    level3D.enemies.forEach((e, key) => createEnemyMarker(key));
   }
   playerInvincible = false;
   playerInvincibleTimer = 0;
@@ -401,6 +405,49 @@ function createPrismMesh(key, p) {
   mesh.userData = { key, type: isMiniPrism ? 'miniprism' : 'prism', isMiniPrism, baseY: py + 0.55 };
   prismsGroup.add(mesh);
   p.mesh = mesh;
+}
+
+// A live, player-chasing enemy at the given cell (gameplay / playtest).
+function spawnEnemy(key) {
+  const [x, y, z] = key.split(',').map(Number);
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.22, metalness: 0.05, emissiveIntensity: 0.9 });
+  const cube = new THREE.Mesh(geoCube, mat);
+  cube.castShadow = true; cube.receiveShadow = true;
+  cube.position.copy(getPlayerWorldPos(x, y, z, false));
+  worldGroup.add(cube);
+  enemies.push({
+    cube,
+    grid: { x, y, z },
+    isRolling: false,
+    animStartTime: 0,
+    animStartPos: new THREE.Vector3(),
+    animEndPos: new THREE.Vector3(),
+    animStartQuat: new THREE.Quaternion(),
+    animDeltaQuat: new THREE.Quaternion(),
+    moveTimer: 1.5,                 // brief head start before the chase begins
+    hue: Math.random()             // desync the rainbow cycle between enemies
+  });
+}
+
+// A static editor marker so the designer can see/erase placed enemies. Kept
+// opaque (no transparency render-order surprises) with a bright edge cage so it
+// reads clearly as an enemy spawn point.
+function createEnemyMarker(key) {
+  const [x, y, z] = key.split(',').map(Number);
+  const mesh = new THREE.Mesh(geoCube, new THREE.MeshStandardMaterial({
+    color: 0xff1a66, emissive: 0xff2288, emissiveIntensity: 0.85, roughness: 0.25, metalness: 0.1
+  }));
+  mesh.scale.set(0.9, 0.9, 0.9);
+  mesh.position.copy(getPlayerWorldPos(x, y, z, false));
+  mesh.castShadow = true;
+  mesh.userData = { key, type: 'enemy' };
+  const edge = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geoCube),
+    new THREE.LineBasicMaterial({ color: 0xffffff })
+  );
+  mesh.add(edge);
+  prismsGroup.add(mesh);
+  enemyMarkers.set(key, mesh);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -907,6 +954,19 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
   animAxis.copy(axis);
   animDeltaQuat.setFromAxisAngle(axis, Math.PI/2);
   animFromEdge = false;
+
+  // Platform-relative roll: when the player rides a mover (and isn't leaving it
+  // downward), anchor the roll to the platform's frame. The player sits at a
+  // possibly fractional world position mid-step, so snapping the target to an
+  // integer cell would bend the path diagonally. Instead the target is exactly
+  // one cell from the start, and the platform's own motion is added during the
+  // animation — so a forward press always rolls straight relative to the deck.
+  rollCarrier = (ridingPlatform && !isWall && action !== 'fall' && action !== 'void') ? ridingPlatform : null;
+  if (rollCarrier) {
+    rollCarrierStart.copy(rollCarrier.position);
+    animEndPos.x = animStartPos.x + dirX;
+    animEndPos.z = animStartPos.z + dirZ;
+  }
 
   const prevKey = `${playerGridPos.x},${playerGridPos.y},${playerGridPos.z}`;
   playerGridPos.x = isWall ? playerGridPos.x : toGX;
@@ -1570,6 +1630,17 @@ function updateEditorSlicing() {
       }
     }
   });
+  enemyMarkers.forEach((m, k) => {
+    const ey = k.split(',').map(Number)[1];
+    if (sliceModeActive && ey > editY) {
+      m.visible = false;
+    } else {
+      m.visible = true;
+      const below = ey < editY;
+      m.material.transparent = below;
+      m.material.opacity = below ? 0.35 : 1.0;
+    }
+  });
   movingPlatformsList.forEach(mp => {
     const mpy = Math.round(mp.position.y);
     if (sliceModeActive && mpy > editY) {
@@ -1816,7 +1887,7 @@ function snapItemCell(hit) {
   // Items (start/exit/prisms) must sit on a block cell to be reachable.
   // When clicking a block, use that cell; on empty grid cells, snap down
   // to the top block of the column.
-  if (hit.hitKey && hit.hitType !== 'prism' && hit.hitType !== 'miniprism') {
+  if (hit.hitKey && hit.hitType !== 'prism' && hit.hitType !== 'miniprism' && hit.hitType !== 'enemy') {
     return { x: hit.x, y: hit.y, z: hit.z };
   }
   let topY = null;
@@ -1828,8 +1899,19 @@ function snapItemCell(hit) {
 
 // Incremental editing — avoids a full level rebuild (and audio restart) on
 // every placed/erased voxel, which made painting large levels laggy.
-function editorEraseKey(key, kinds = ['block', 'prism']) {
+function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
   let removed = false;
+  if (kinds.includes('enemy') && activeLevel.enemies.has(key)) {
+    activeLevel.enemies.delete(key);
+    const m = enemyMarkers.get(key);
+    if (m) {
+      prismsGroup.remove(m);
+      if (m.material) m.material.dispose();
+      m.children.forEach(ch => { if (ch.geometry) ch.geometry.dispose(); if (ch.material) ch.material.dispose(); });
+    }
+    enemyMarkers.delete(key);
+    removed = true;
+  }
   if (kinds.includes('prism') && activeLevel.prisms.has(key)) {
     activeLevel.prisms.delete(key);
     const p = activePrisms.get(key);
@@ -1901,6 +1983,15 @@ function editorPlacePrism(x, y, z, type) {
   return true;
 }
 
+function editorPlaceEnemy(x, y, z) {
+  const key = `${x},${y},${z}`;
+  if (activeLevel.enemies.has(key)) return false;
+  activeLevel.enemies.set(key, {});
+  createEnemyMarker(key);
+  updateEditorSlicing();
+  return true;
+}
+
 function editorSetStart(c) {
   activeLevel.start = { x: c.x, y: c.y, z: c.z };
   playerGridPos = { ...activeLevel.start };
@@ -1917,7 +2008,9 @@ function handleEditorClick(e) {
 
   if (selectedTool === 'eraser') {
     if (hit.hitKey) {
-      const kinds = (hit.hitType === 'prism' || hit.hitType === 'miniprism') ? ['prism'] : ['block'];
+      let kinds = ['block'];
+      if (hit.hitType === 'prism' || hit.hitType === 'miniprism') kinds = ['prism'];
+      else if (hit.hitType === 'enemy') kinds = ['enemy'];
       if (editorEraseKey(hit.hitKey, kinds)) audio.playBreak();
     }
     return;
@@ -2018,6 +2111,9 @@ function handleEditorClick(e) {
   } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
     const c = snapItemCell(hit);
     if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
+  } else if (selectedTool === 'enemy') {
+    const c = snapItemCell(hit);
+    if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playRoll();
   } else if (selectedTool === 'start') {
     editorSetStart(snapItemCell(hit));
   } else if (selectedTool === 'exit') {
@@ -2054,6 +2150,9 @@ function handleEditorDragClick(e) {
     } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
       if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
+    } else if (selectedTool === 'enemy') {
+      const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
+      if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playRoll();
     } else if (selectedTool === 'start') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
       if (activeLevel.start.x !== c.x || activeLevel.start.y !== c.y || activeLevel.start.z !== c.z) {
@@ -2309,6 +2408,9 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
           editorGhostBlock.geometry = geoPrism;
           editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+        } else if (hit.hitType === 'enemy') {
+          editorGhostBlock.geometry = geoCube;
+          editorGhostBlock.position.set(hit.x, hit.y + 1, hit.z);
         } else {
           editorGhostBlock.geometry = geoTile;
           editorGhostBlock.position.set(hit.x, hit.y, hit.z);
@@ -2334,6 +2436,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         else if (selectedTool === 'booster') ghostColor = 0xffcc00;
         else if (selectedTool === 'start') ghostColor = 0xff6600;
         else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
+        else if (selectedTool === 'enemy') ghostColor = 0xff0066;
 
         editorGhostBlock.material.color.setHex(ghostColor);
         let targetY = hit.y;
@@ -2343,7 +2446,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
           editorGhostBlock.geometry = geoPrism;
           targetY = hit.y + 0.55;
-        } else if (selectedTool === 'start' || selectedTool === 'exit') {
+        } else if (selectedTool === 'start' || selectedTool === 'exit' || selectedTool === 'enemy') {
           // Marker preview floats where the player cube / exit ring appears
           editorGhostBlock.geometry = geoCube;
           targetY = hit.y + 1;
@@ -2625,9 +2728,8 @@ function getEnemyMoveTargetY(fromX, fromY, fromZ, toX, toZ) {
   return null; // void – enemy doesn't fall
 }
 
-function enemyBFS() {
-  if (!enemyCube) return null;
-  const fromX = enemyGridPos.x, fromY = enemyGridPos.y, fromZ = enemyGridPos.z;
+function enemyBFS(enemy) {
+  const fromX = enemy.grid.x, fromY = enemy.grid.y, fromZ = enemy.grid.z;
   const toX = playerGridPos.x, toZ = playerGridPos.z;
   if (fromX === toX && fromZ === toZ) return null;
 
@@ -2659,8 +2761,9 @@ function enemyBFS() {
   return null;
 }
 
-function findEnemySpawnPos() {
-  // BFS from player start – pick the most distant reachable cell (not exit, not start)
+// Most distant reachable cell from the player start (excluding start/exit) —
+// used only as the legacy auto-spawn point for built-in campaign levels.
+function findEnemySpawnKey() {
   const sx = playerGridPos.x, sy = playerGridPos.y, sz = playerGridPos.z;
   const visited = new Set();
   visited.add(`${sx},${sy},${sz}`);
@@ -2680,26 +2783,26 @@ function findEnemySpawnPos() {
       if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, dist: dist + 1 }); }
     }
   }
-  return best;
+  return `${best.x},${best.y},${best.z}`;
 }
 
-function startEnemyRoll(dx, dz) {
-  const toGX = enemyGridPos.x + dx, toGZ = enemyGridPos.z + dz;
-  const ny = getEnemyMoveTargetY(enemyGridPos.x, enemyGridPos.y, enemyGridPos.z, toGX, toGZ);
+function startEnemyRoll(enemy, dx, dz) {
+  const toGX = enemy.grid.x + dx, toGZ = enemy.grid.z + dz;
+  const ny = getEnemyMoveTargetY(enemy.grid.x, enemy.grid.y, enemy.grid.z, toGX, toGZ);
   if (ny === null) return;
 
-  enemyIsRolling = true;
-  enemyAnimStartTime = performance.now() / 1000;
-  enemyAnimStartPos.copy(enemyCube.position);
-  enemyAnimEndPos.copy(getPlayerWorldPos(toGX, ny, toGZ, false));
-  enemyAnimStartQuat.copy(enemyCube.quaternion);
+  enemy.isRolling = true;
+  enemy.animStartTime = performance.now() / 1000;
+  enemy.animStartPos.copy(enemy.cube.position);
+  enemy.animEndPos.copy(getPlayerWorldPos(toGX, ny, toGZ, false));
+  enemy.animStartQuat.copy(enemy.cube.quaternion);
 
   const axis = new THREE.Vector3(dz, 0, -dx).normalize();
-  enemyAnimDeltaQuat.setFromAxisAngle(axis, Math.PI / 2);
+  enemy.animDeltaQuat.setFromAxisAngle(axis, Math.PI / 2);
 
-  enemyGridPos.x = toGX;
-  enemyGridPos.y = ny;
-  enemyGridPos.z = toGZ;
+  enemy.grid.x = toGX;
+  enemy.grid.y = ny;
+  enemy.grid.z = toGZ;
 }
 
 function loseLife() {
@@ -2849,6 +2952,8 @@ function animate(timestamp) {
       const pos = new THREE.Vector3().lerpVectors(animStartPos, animEndPos, t);
       // Bounce Y curve
       pos.y += CUBE_S * 0.25 * Math.sin(Math.PI*t);
+      // Carry the player with the platform for the duration of a platform roll.
+      if (rollCarrier) pos.add(rollCarrier.position).sub(rollCarrierStart);
       playerCube.position.copy(pos);
 
       const quat = animStartQuat.clone();
@@ -2861,6 +2966,14 @@ function animate(timestamp) {
 
       if (elapsed >= dur) {
         playerCube.position.copy(animEndPos);
+        if (rollCarrier) {
+          // Settle at the platform-carried landing and sync the grid cell to it
+          // so the riding logic re-boards the correct cell next frame.
+          playerCube.position.add(rollCarrier.position).sub(rollCarrierStart);
+          playerGridPos.x = Math.round(playerCube.position.x);
+          playerGridPos.z = Math.round(playerCube.position.z);
+          rollCarrier = null;
+        }
         playerCube.quaternion.copy(new THREE.Quaternion().multiplyQuaternions(animDeltaQuat, animStartQuat));
         isRolling = false;
         cameraTarget.copy(playerCube.position);
@@ -2894,52 +3007,53 @@ function animate(timestamp) {
       }
     }
 
-    // ─── ENEMY ───────────────────────────────────────────────
-    if (enemyCube) {
+    // ─── ENEMIES ─────────────────────────────────────────────
+    for (const en of enemies) {
       // Rainbow color cycle
-      enemyHue = (enemyHue + dt * 0.55) % 1.0;
-      enemyCube.material.color.setHSL(enemyHue, 1.0, 0.52);
-      enemyCube.material.emissive.setHSL(enemyHue, 1.0, 0.38);
+      en.hue = (en.hue + dt * 0.55) % 1.0;
+      en.cube.material.color.setHSL(en.hue, 1.0, 0.52);
+      en.cube.material.emissive.setHSL(en.hue, 1.0, 0.38);
 
       // Roll animation (same math as player)
-      if (enemyIsRolling) {
-        const eElapsed = now - enemyAnimStartTime;
+      if (en.isRolling) {
+        const eElapsed = now - en.animStartTime;
         const eDur = ROLL_DUR_NORMAL * 0.72;
         let et = Math.min(eElapsed / eDur, 1.0);
         et = 1 - Math.pow(1 - et, 2.5);
 
-        const ePos = new THREE.Vector3().lerpVectors(enemyAnimStartPos, enemyAnimEndPos, et);
+        const ePos = new THREE.Vector3().lerpVectors(en.animStartPos, en.animEndPos, et);
         ePos.y += CUBE_S * 0.25 * Math.sin(Math.PI * et);
-        enemyCube.position.copy(ePos);
+        en.cube.position.copy(ePos);
 
-        const eQuat = enemyAnimStartQuat.clone();
-        eQuat.slerp(new THREE.Quaternion().multiplyQuaternions(enemyAnimDeltaQuat, enemyAnimStartQuat), et);
-        enemyCube.quaternion.copy(eQuat);
+        const eQuat = en.animStartQuat.clone();
+        eQuat.slerp(new THREE.Quaternion().multiplyQuaternions(en.animDeltaQuat, en.animStartQuat), et);
+        en.cube.quaternion.copy(eQuat);
 
         if (eElapsed >= eDur) {
-          enemyCube.position.copy(enemyAnimEndPos);
-          enemyCube.quaternion.copy(new THREE.Quaternion().multiplyQuaternions(enemyAnimDeltaQuat, enemyAnimStartQuat));
-          enemyIsRolling = false;
+          en.cube.position.copy(en.animEndPos);
+          en.cube.quaternion.copy(new THREE.Quaternion().multiplyQuaternions(en.animDeltaQuat, en.animStartQuat));
+          en.isRolling = false;
         }
       }
 
       // Pathfinding movement
-      if (!enemyIsRolling && !isLevelComplete) {
-        enemyMoveTimer -= dt;
-        if (enemyMoveTimer <= 0) {
-          enemyMoveTimer = ENEMY_MOVE_INTERVAL;
-          const step = enemyBFS();
-          if (step) startEnemyRoll(step.dx, step.dz);
+      if (!en.isRolling && !isLevelComplete) {
+        en.moveTimer -= dt;
+        if (en.moveTimer <= 0) {
+          en.moveTimer = ENEMY_MOVE_INTERVAL;
+          const step = enemyBFS(en);
+          if (step) startEnemyRoll(en, step.dx, step.dz);
         }
       }
 
-      // Collision with player
+      // Collision with player. loseLife() rebuilds the level (and the enemies
+      // array), so stop iterating the now-stale list immediately.
       if (!playerInvincible && !isLevelComplete && playerCube) {
-        const sameCell = playerGridPos.x === enemyGridPos.x &&
-                         playerGridPos.y === enemyGridPos.y &&
-                         playerGridPos.z === enemyGridPos.z;
-        const touching = playerCube.position.distanceTo(enemyCube.position) < CUBE_S * 1.05;
-        if (sameCell || touching) loseLife();
+        const sameCell = playerGridPos.x === en.grid.x &&
+                         playerGridPos.y === en.grid.y &&
+                         playerGridPos.z === en.grid.z;
+        const touching = playerCube.position.distanceTo(en.cube.position) < CUBE_S * 1.05;
+        if (sameCell || touching) { loseLife(); break; }
       }
     }
 
@@ -3026,9 +3140,10 @@ function animate(timestamp) {
     p.scale.setScalar(0.6 + 0.4*(1 - p.userData.age/p.userData.life));
   }
 
-  // Animate prisms
+  // Animate prisms. prismsGroup also holds static enemy markers (no baseY) —
+  // skip those so we don't write NaN into their position and cull them.
   for (const child of prismsGroup.children) {
-    if (child.userData) {
+    if (child.userData && child.userData.baseY !== undefined) {
       child.position.y = child.userData.baseY + Math.sin(now*2.5 + child.position.x*1.3)*0.12;
       child.rotation.y += 0.025; child.rotation.x += 0.015;
     }

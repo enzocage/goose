@@ -11,6 +11,7 @@ export class Level3D {
     this.exit = { x:3, y:0, z:3 };
     this.blocks = new Map(); // key "x,y,z" -> {x, y, z, type, properties}
     this.prisms = new Map(); // key "x,y,z" -> {type}
+    this.enemies = new Map(); // key "x,y,z" -> {} (rainbow chaser spawn points)
     this.links = []; // Trigger links: {type, from, to} / {type, k1, k2}
   }
 }
@@ -181,11 +182,16 @@ export function serializeLevel(level3D) {
     const [px,py,pz] = k.split(',').map(Number);
     prisms.push([px,py,pz,p.type]);
   });
+  const enemies = [];
+  (level3D.enemies || new Map()).forEach((e, k) => {
+    const [ex,ey,ez] = k.split(',').map(Number);
+    enemies.push([ex,ey,ez]);
+  });
   return JSON.stringify({
     name: level3D.name, world: level3D.world, par: level3D.par,
     start: [level3D.start.x, level3D.start.y, level3D.start.z],
     exit: [level3D.exit.x, level3D.exit.y, level3D.exit.z],
-    blocks, prisms, links: level3D.links
+    blocks, prisms, enemies, links: level3D.links
   });
 }
 
@@ -203,6 +209,9 @@ export function deserializeLevel(jsonStr) {
   });
   data.prisms.forEach(arr => {
     lvl.prisms.set(`${arr[0]},${arr[1]},${arr[2]}`, { type:arr[3] || 'normal' });
+  });
+  (data.enemies || []).forEach(arr => {
+    lvl.enemies.set(`${arr[0]},${arr[1]},${arr[2]}`, {});
   });
   lvl.links = data.links || [];
   return lvl;
