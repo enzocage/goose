@@ -1558,9 +1558,47 @@ function archReachable(blocks, start) {
 
 function generateArchitectLevel(difficulty) {
   const P = architectParams(difficulty);
+  const world = Math.min(4, Math.floor((difficulty - 1) / 2));
+  return buildArchitect(P, `Architect · Lvl ${difficulty}`, world);
+}
+
+// AI Pro2 — toggle-driven Architect. The 10 criteria switch whole element
+// families on/off; `size` (1..10) scales how much of each enabled family
+// appears. The shared builder still guarantees a solvable level.
+function generateArchitectLevel2(opts) {
+  const size = Math.max(1, Math.min(10, opts.size || 5));
+  const P = architectParams(size);
+  if (!opts.verticality) { P.maxFloors = 0; P.floorChance = 0; }
+  if (!opts.teleporters) { P.teleporters = 0; }
+  if (!opts.switchGates) { P.switchGates = 0; }
+  if (!opts.movers)      { P.movers = 0; }
+  if (!opts.ice)         { P.iceChance = 0; }
+  if (!opts.enemies)     { P.enemies = 0; }
+  if (!opts.collapse)    { P.fragileChance = 0; P.shakerChance = 0; }
+  if (!opts.danger)      { P.dangerChance = 0; }
+  // Hazards (collapse/danger) and bonus mini-prisms live only on optional
+  // branch cells. If the player wants those families but turned exploration
+  // branches off, keep a few short spurs to host them; otherwise honour a
+  // fully linear layout.
+  if (!opts.branching) {
+    const needHosts = opts.collapse || opts.danger;
+    P.branches = needHosts ? Math.max(2, Math.round(size / 3)) : 0;
+    P.branchLen = Math.min(P.branchLen, 3);
+    P.miniprisms = needHosts ? Math.min(P.miniprisms, 3) : 0;
+  }
+  // Crate puzzles are a new module not covered by architectParams.
+  P.crates = opts.crates ? Math.max(1, Math.round(size / 3)) : 0;
+  const world = Math.min(4, Math.floor((size - 1) / 2));
+  return buildArchitect(P, `Architect2 · Lvl ${size}`, world);
+}
+
+// Shared Architect builder: turns a fully-resolved parameter set into a
+// guaranteed-solvable level. Used by both AI Pro (difficulty preset) and
+// AI Pro2 (per-criterion toggles).
+function buildArchitect(P, name, world) {
   const lvl = new Level3D();
-  lvl.name = `Architect · Lvl ${difficulty}`;
-  lvl.world = Math.min(4, Math.floor((difficulty - 1) / 2));
+  lvl.name = name;
+  lvl.world = world;
 
   const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
   const occ = new Map(); // "x,z" → y (one height per column keeps the path ceiling-free)
@@ -1680,6 +1718,38 @@ function generateArchitectLevel(difficulty) {
     setBlock(g1, 'moving', { targetX: g2.x, targetY: g2.y, targetZ: g2.z, speed: 1.2 });
     setBlock(plat, 'normal');
     lvl.prisms.set(`${plat.x},${plat.y},${plat.z}`, { type: 'miniprism' });
+  }
+
+  // ── 5b) Crate & pressure-plate puzzles ──
+  // Push the crate one cell onto the plate to open a plate-gated bridge that
+  // leads to a bonus mini-prism. Built entirely on fresh off-path cells (flat,
+  // at the anchor's height), so the critical route is never affected and the
+  // reward is always optional — no softlock risk.
+  const perpOf = d => ({ dx: d.dz, dz: d.dx });
+  const colFree = c => inBounds(c.x, c.z) && !occ.has(`${c.x},${c.z}`);
+  let cratesPlaced = 0;
+  for (let a = 0; cratesPlaced < (P.crates || 0) && a < (P.crates || 0) * 40 + 40; a++) {
+    const anchor = path[2 + Math.floor(Math.random() * Math.max(1, path.length - 3))];
+    const anchorKey = `${anchor.x},${anchor.y},${anchor.z}`;
+    if (anchorKey === startKey || anchorKey === exitKey) continue;
+    const d = dirs[Math.floor(Math.random() * 4)];
+    const pp = perpOf(d);
+    const p = Math.random() < 0.5 ? pp : { dx: -pp.dx, dz: -pp.dz };
+    const y = anchor.y;
+    const C0 = { x: anchor.x + d.dx,     y, z: anchor.z + d.dz };     // floor + crate (sits at y+1)
+    const C1 = { x: anchor.x + 2 * d.dx, y, z: anchor.z + 2 * d.dz }; // pressure plate (push target)
+    const B0 = { x: anchor.x + p.dx,     y, z: anchor.z + p.dz };     // plate-gated bonus bridge
+    const R  = { x: anchor.x + 2 * p.dx, y, z: anchor.z + 2 * p.dz }; // reward: floor + mini-prism
+    if (![C0, C1, B0, R].every(colFree)) continue;
+    [C0, C1, B0, R].forEach(c => occ.set(`${c.x},${c.z}`, c.y));
+    setBlock(C0, 'normal');
+    setBlock({ x: C0.x, y: y + 1, z: C0.z }, 'pushable'); // the crate, resting on C0's floor
+    setBlock(C1, 'pressureplate');
+    setBlock(B0, 'bridge');
+    setBlock(R, 'normal');
+    lvl.links.push({ type: 'switch-trigger', from: `${C1.x},${C1.y},${C1.z}`, to: `${B0.x},${B0.y},${B0.z}` });
+    lvl.prisms.set(`${R.x},${R.y},${R.z}`, { type: 'miniprism' });
+    cratesPlaced++;
   }
 
   // ── 6) Mandatory prisms on backbone cells (always reachable) ──
@@ -3016,6 +3086,48 @@ document.getElementById('btn-ai-architect').addEventListener('click', () => {
     drawEditorWires();
     showMessage(`ARCHITECT LEVEL — DIFFICULTY ${difficulty}`);
   }
+});
+
+// AI Pro2 — open the criteria modal, then generate from the chosen toggles.
+document.getElementById('btn-ai-architect2').addEventListener('click', () => {
+  audio.init();
+  document.getElementById('ai-pro2-modal').style.display = 'flex';
+});
+document.getElementById('btn-ai-pro2-close').addEventListener('click', () => {
+  document.getElementById('ai-pro2-modal').style.display = 'none';
+});
+{
+  const ai2Size = document.getElementById('ai2-size');
+  ai2Size.addEventListener('input', () => {
+    document.getElementById('ai2-size-val').textContent = ai2Size.value;
+  });
+}
+document.getElementById('btn-ai-pro2-generate').addEventListener('click', () => {
+  audio.init();
+  const cb = id => document.getElementById(id).checked;
+  const opts = {
+    size: parseInt(document.getElementById('ai2-size').value, 10) || 5,
+    verticality: cb('ai2-verticality'),
+    branching:   cb('ai2-branching'),
+    teleporters: cb('ai2-teleporters'),
+    switchGates: cb('ai2-switchGates'),
+    movers:      cb('ai2-movers'),
+    crates:      cb('ai2-crates'),
+    collapse:    cb('ai2-collapse'),
+    ice:         cb('ai2-ice'),
+    danger:      cb('ai2-danger'),
+    enemies:     cb('ai2-enemies'),
+  };
+  pushUndoSnapshot();
+  const lvl = generateArchitectLevel2(opts);
+  activeLevel = lvl;
+  document.getElementById('level-name-input').value = lvl.name;
+  document.getElementById('world-select').value = lvl.world;
+  adjustEditHeight(-editY); // reset edit height to 0
+  buildLevel3D(lvl);
+  drawEditorWires();
+  document.getElementById('ai-pro2-modal').style.display = 'none';
+  showMessage(`AI PRO2 — ${lvl.name}`);
 });
 
 document.getElementById('btn-clear-grid').addEventListener('click', () => {

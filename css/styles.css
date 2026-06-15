@@ -263,6 +263,23 @@
     height: 200px; resize: none; padding: 12px; outline: none; width: 100%;
   }
 
+  /* AI Pro2 — dynamic level-design criteria modal */
+  .ai2-intro { font-size: 11px; opacity: 0.6; margin: 0 0 14px; line-height: 1.5; }
+  .ai2-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ai2-option {
+    display: flex; align-items: flex-start; gap: 8px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 8px 10px; cursor: pointer; transition: all 0.15s;
+  }
+  .ai2-option:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); }
+  .ai2-option input { margin-top: 2px; accent-color: var(--green); cursor: pointer; flex-shrink: 0; }
+  .ai2-option span { display: flex; flex-direction: column; }
+  .ai2-option b { font-size: 11px; color: var(--text); }
+  .ai2-option small { font-size: 9px; opacity: 0.55; }
+  .ai2-size-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; font-size: 11px; }
+  .ai2-size-row input[type=range] { flex-grow: 1; accent-color: var(--green); cursor: pointer; }
+  #ai2-size-val { width: 18px; text-align: center; color: var(--accent2); font-weight: bold; }
+
   /* Mini Cube Duration HUD bar */
   #mini-hud-bar {
     position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);

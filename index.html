@@ -170,6 +170,7 @@
         <option value="10">Diff: 10 · extreme</option>
       </select>
       <button id="btn-ai-architect" class="editor-btn success" title="Architect: build a guaranteed-solvable level scaled to the chosen difficulty, using all elements">AI Pro</button>
+      <button id="btn-ai-architect2" class="editor-btn success" title="AI Pro2: pick the design criteria, then build a guaranteed-solvable level from them">AI Pro2</button>
       <button id="btn-toggle-slice" class="editor-btn success" title="Toggle layer slicing (hides blocks above current height)">Slice: ON</button>
       <button id="btn-undo" class="editor-btn" title="Undo last edit (Ctrl+Z) — up to 250 steps" disabled>↶ Undo</button>
       <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
@@ -247,6 +248,35 @@
       <button id="btn-modal-close" class="editor-btn">Close</button>
     </div>
     <input type="file" id="import-file-input" accept=".json" style="display:none;">
+  </div>
+</div>
+
+<!-- AI Pro2 — dynamic level-design criteria -->
+<div id="ai-pro2-modal" class="modal-overlay" style="display:none; z-index: 260;">
+  <div class="modal-content">
+    <div class="modal-header">AI PRO2 — DYNAMIC LEVEL DESIGN</div>
+    <p class="ai2-intro">Wähle die Kriterien, die das Leveldesign bestimmen. Der Größenregler skaliert die Menge der aktivierten Elemente. Das Ergebnis ist immer lösbar.</p>
+    <div class="ai2-grid">
+      <label class="ai2-option"><input type="checkbox" id="ai2-verticality" checked><span><b>Mehrstöckig</b><small>Höhen, Treppen, tiefe Stürze</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-branching" checked><span><b>Verzweigtes Layout</b><small>Nebenwege & Räume</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-teleporters" checked><span><b>Teleporter-Shortcuts</b><small>Portale & Schleifen</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-switchGates" checked><span><b>Schalter-Tore</b><small>Brücken per Schalter</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-movers" checked><span><b>Bewegliche Plattformen</b><small>Timing-Überfahrten</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-crates"><span><b>Kisten-Schieberätsel</b><small>Kiste auf Druckplatte</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-collapse" checked><span><b>Einsturz-Pfade</b><small>Fragil & Shaker</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-ice" checked><span><b>Eis-Rutschen</b><small>Schlitterflächen</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-danger" checked><span><b>Tödliche Hazards</b><small>Spikes auf Nebenwegen</small></span></label>
+      <label class="ai2-option"><input type="checkbox" id="ai2-enemies"><span><b>Verfolger-Gegner</b><small>Jagende Regenbogen-Gegner</small></span></label>
+    </div>
+    <div class="ai2-size-row">
+      <label for="ai2-size">Größe / Dichte</label>
+      <input type="range" id="ai2-size" min="1" max="10" value="5">
+      <span id="ai2-size-val">5</span>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+      <button id="btn-ai-pro2-generate" class="editor-btn success">Generate</button>
+      <button id="btn-ai-pro2-close" class="editor-btn">Close</button>
+    </div>
   </div>
 </div>
 
