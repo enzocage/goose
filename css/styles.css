@@ -89,6 +89,17 @@
   #world-overlay { background:rgba(0,0,0,0.7); }
   #world-subtitle { font-size:16px; letter-spacing:0.2em; color:var(--text); opacity:0.6; }
 
+  /* Pause + free-orbit overlay (toggle with P) */
+  #pause-overlay { position:fixed; inset:0; z-index:30; pointer-events:none;
+    display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+    padding-top:84px; gap:10px; opacity:0; transition:opacity 0.3s; }
+  #pause-overlay.show { opacity:1; }
+  #pause-overlay .pause-title { font-size:30px; font-weight:100; letter-spacing:0.25em;
+    color:var(--text); text-shadow:0 0 60px var(--accent2); }
+  #pause-overlay .pause-hint { font-size:13px; letter-spacing:0.12em; color:var(--text); opacity:0.65; }
+  /* Let the game canvas own touch gestures so pause-orbit drag/pinch don't scroll the page */
+  #canvas-container canvas { touch-action:none; }
+
   /* ═══════════════════════════════════════════════════════════
      HUD / BUTTON UPGRADES
      ═══════════════════════════════════════════════════════════ */

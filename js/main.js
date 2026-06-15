@@ -42,6 +42,18 @@ let isLevelComplete = false;
 let isMini = false;
 let isCustomLevel = false;
 let isHelpOpen = false;
+// X-ray view (toggled with T): renders all blocks see-through so the player can
+// reveal level structure hidden behind nearer geometry from the fixed camera.
+let xrayMode = false;
+const XRAY_OPACITY = 0.3;
+
+// Pause + free orbit (toggled with P): freezes the game and lets the player
+// orbit the camera 360° around the (centred) cube — drag to rotate, wheel or
+// pinch to zoom. Works with mouse and touch.
+let isPaused = false;
+let pauseYaw = 0.72, pausePitch = 0.675, pauseZoom = 13.6;
+const pausePointers = new Map(); // pointerId → {x,y} for drag + pinch
+let pausePinchDist = null;
 
 let balanceDir = null;
 let balanceTimer = 0;
@@ -162,6 +174,9 @@ function clearLevel() {
   switchStates.clear();
   linkerSourceKey = null;
   currentGroupId = null;
+  // A rebuild (level change / restart) clears any active pause.
+  if (isPaused) { isPaused = false; document.getElementById('pause-overlay')?.classList.remove('show'); }
+  pausePointers.clear(); pausePinchDist = null;
 }
 
 function getPlayerWorldPos(gx, gy, gz, miniState) {
@@ -1898,6 +1913,7 @@ function updateEditorSlicing() {
     movingPlatformsList.forEach(mp => {
       mp.mesh.visible = true;
     });
+    applyXrayOverride();
     return;
   }
   activeBlocks.forEach(b => {
@@ -1960,6 +1976,66 @@ function updateEditorSlicing() {
       }
     }
   });
+  applyXrayOverride();
+}
+
+// X-ray view: force every currently-visible block / platform see-through so the
+// whole 3D structure reads through nearer geometry. Runs as the last step of
+// updateEditorSlicing so it survives slicing, edits and rebuilds. Prisms, enemy
+// markers and edge outlines stay opaque to remain readable.
+function applyXrayOverride() {
+  if (!xrayMode) return;
+  activeBlocks.forEach(b => {
+    if (b.mesh && b.mesh.visible) {
+      b.mesh.material.transparent = true;
+      b.mesh.material.opacity = XRAY_OPACITY;
+    }
+  });
+  movingPlatformsList.forEach(mp => {
+    if (mp.mesh && mp.mesh.visible) {
+      mp.mesh.material.transparent = true;
+      mp.mesh.material.opacity = XRAY_OPACITY;
+    }
+  });
+}
+
+function toggleXray() {
+  xrayMode = !xrayMode;
+  audio.playSwitch();
+  updateEditorSlicing(); // applies the override, or restores normal opacity when off
+  showMessage(xrayMode ? 'X-RAY VIEW ON' : 'X-RAY VIEW OFF', 1.2);
+}
+
+// Orbit the camera around the (frozen) player while paused. Player stays centred.
+function updatePauseOrbitCamera() {
+  if (!playerCube) return;
+  const t = playerCube.position;
+  camera.position.set(
+    t.x + Math.sin(pauseYaw) * Math.cos(pausePitch) * pauseZoom,
+    t.y + Math.sin(pausePitch) * pauseZoom,
+    t.z + Math.cos(pauseYaw) * Math.cos(pausePitch) * pauseZoom
+  );
+  camera.lookAt(t);
+}
+
+function togglePause() {
+  if (isEditMode && !isPlaytesting) return; // pause only applies to play / playtest
+  isPaused = !isPaused;
+  audio.playSwitch();
+  const ov = document.getElementById('pause-overlay');
+  if (isPaused) {
+    // Seed the orbit from the current camera so there's no jump on pause.
+    if (playerCube) {
+      const rel = camera.position.clone().sub(playerCube.position);
+      pauseZoom = Math.max(3, rel.length());
+      pausePitch = Math.asin(THREE.MathUtils.clamp(rel.y / pauseZoom, -1, 1));
+      pauseYaw = Math.atan2(rel.x, rel.z);
+    }
+    pausePointers.clear(); pausePinchDist = null;
+    ov && ov.classList.add('show');
+  } else {
+    ov && ov.classList.remove('show');
+  }
 }
 
 function loadDemoLevel() {
@@ -2582,6 +2658,14 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH') { setHelpOpen(!isHelpOpen); return; }
   if (isHelpOpen) { if (e.code === 'Escape') setHelpOpen(false); return; }
 
+  // X-ray view toggle — works in play and editor alike.
+  if (e.code === 'KeyT') { e.preventDefault(); toggleXray(); return; }
+
+  // Pause + free-orbit camera toggle (play / playtest only).
+  if (e.code === 'KeyP') { e.preventDefault(); togglePause(); return; }
+  // While paused, swallow every other key so the frozen game can't be driven.
+  if (isPaused) return;
+
   if (isBalancing) {
     let rollBack = false;
     if (lastMoveDir.x === 1 && (e.code === 'ArrowLeft' || e.code === 'KeyA')) rollBack = true;
@@ -2814,6 +2898,41 @@ window.addEventListener('wheel', (e) => {
     editorCameraZoom = Math.max(5, Math.min(45, editorCameraZoom + (e.deltaY * 0.01)));
   }
 });
+
+/* ═══ PAUSE FREE-ORBIT INPUT (mouse + touch): drag to rotate, wheel/pinch to zoom ═══ */
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (!isPaused) return;
+  pausePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+});
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!isPaused || !pausePointers.has(e.pointerId)) return;
+  const prev = pausePointers.get(e.pointerId);
+  pausePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pausePointers.size >= 2) {
+    // Two-finger pinch → zoom
+    const pts = [...pausePointers.values()];
+    const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (pausePinchDist != null && d > 0) pauseZoom = Math.max(3, Math.min(45, pauseZoom * (pausePinchDist / d)));
+    pausePinchDist = d;
+  } else {
+    // Single pointer → orbit (full 360° yaw, clamped pitch)
+    pauseYaw -= (e.clientX - prev.x) * 0.008;
+    pausePitch = Math.max(0.05, Math.min(1.5, pausePitch + (e.clientY - prev.y) * 0.008));
+  }
+});
+window.addEventListener('pointerup', (e) => {
+  pausePointers.delete(e.pointerId);
+  if (pausePointers.size < 2) pausePinchDist = null;
+});
+window.addEventListener('pointercancel', (e) => {
+  pausePointers.delete(e.pointerId);
+  if (pausePointers.size < 2) pausePinchDist = null;
+});
+window.addEventListener('wheel', (e) => {
+  if (!isPaused) return;
+  e.preventDefault();
+  pauseZoom = Math.max(3, Math.min(45, pauseZoom * (e.deltaY > 0 ? 1.08 : 0.92)));
+}, { passive: false });
 
 /* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR BUTTON EVENTS
@@ -3158,6 +3277,13 @@ function animate(timestamp) {
   const now = timestamp/1000;
   const dt = Math.min(clock.getDelta(), 0.1);
 
+  // Paused: freeze all game logic, only drive the free-orbit camera and render.
+  if (isPaused && (!isEditMode || isPlaytesting)) {
+    updatePauseOrbitCamera();
+    renderer.render(scene, camera);
+    return;
+  }
+
   if (!isEditMode || isPlaytesting) {
     // Game time
     if (!isLevelComplete) { elapsedTime += dt; gameTimer += dt; }
@@ -3305,25 +3431,38 @@ function animate(timestamp) {
     if (isFalling) {
       fallVelY += 14 * dt; // gravity
       playerCube.position.y -= fallVelY * dt;
-      const targetY = playerCube.userData.fallTargetY;
       const size = isMini ? CUBE_S*0.5 : CUBE_S;
 
-      if (playerCube.position.y <= targetY + 0.5 + size/2) {
-        if (targetY > -5) {
-          // Landed
-          playerCube.position.y = targetY + 0.5 + size/2;
-          isFalling = false;
-          playerGridPos.y = targetY;
-          audio.playLand();
-          addShake(0.18);
-          spawnLandingParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
-          onRollComplete();
-        } else {
-          // Void drop
-          if (playerCube.position.y < -8) {
-            respawnPlayer();
-          }
-        }
+      // Re-scan the column beneath the player every frame and land on the
+      // highest supporting block actually reached — including one the initial
+      // fall target missed or that only arrived mid-fall (e.g. a moving
+      // platform). Any solid element catches the player: a deeper fall onto a
+      // load-bearing block is always a safe landing, never a death. Death is
+      // reserved for the genuine void (no block anywhere below).
+      const col = getBlocksInColumn(playerGridPos.x, playerGridPos.z);
+      let landBlock = null;
+      for (const b of col) {                  // sorted highest-first
+        if (b.y >= playerGridPos.y) continue;  // ignore blocks at/above the launch level
+        if (playerCube.position.y <= b.y + 0.5 + size/2) { landBlock = b; break; }
+      }
+
+      if (landBlock) {
+        // Landed on a supporting element
+        playerCube.position.y = landBlock.y + 0.5 + size/2;
+        isFalling = false;
+        playerGridPos.y = landBlock.y;
+        audio.playLand();
+        addShake(0.18);
+        spawnLandingParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
+        // Run the landing cell's effects (switch / exit / hazard / ice …) but
+        // NOT the fall branch of onRollComplete — the fall is over, so neutralise
+        // the action first so the player is free to move again immediately
+        // instead of being re-armed into another fall.
+        playerCube.userData.rollAction = 'land';
+        onRollComplete();
+      } else if (playerCube.position.y < -8) {
+        // Nothing beneath at all → the void
+        respawnPlayer();
       }
     }
 
