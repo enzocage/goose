@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { TILE_SIZE, CUBE_S, ROLL_DUR_NORMAL, ROLL_DUR_MINI, CAM_LERP, BALANCE_WINDOW, COMBO_TIMEOUT } from './constants.js';
+import { TILE_SIZE, CUBE_S, ROLL_DUR_NORMAL, ROLL_DUR_MINI, CAM_LERP, BALANCE_WINDOW, COMBO_TIMEOUT, MAX_LIVES } from './constants.js';
 import { WORLDS, DEMO_LEVEL } from './levels-data.js';
-import { AudioEngine } from './audio.js';
+import { S, audio } from './state.js';
 import {
   renderer, scene, camera, underGlow, starfield, starUniforms,
   matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
@@ -9,168 +9,33 @@ import {
   matCrate, matPressurePlate, matDanger, matShaker, matBooster,
   matPlutonium, matPlutoniumGlow, matContainer,
   geoTile, geoThinTile, geoCube, geoPrism, geoRing, geoPillar, geoTrail,
-  worldGroup, tilesGroup, prismsGroup, effectsGroup, bridgeGroup
+  worldGroup, tilesGroup, prismsGroup, effectsGroup, bridgeGroup,
+  getPlayerWorldPos
 } from './scene.js';
 import { Level3D, MovingPlatform, serializeLevel, deserializeLevel } from './level.js';
+import { generateAILabyrinth, generateArchitectLevel, generateArchitectLevel2, generateArchitectLevel3 } from './ai-levels.js';
+import {
+  spawnEntranceParticles, spawnCollectParticles, spawnBreakParticles, spawnLandingParticles,
+  spawnTeleportParticles, spawnPlutoniumDepositParticles, spawnLevelCompleteExplosion,
+  spawnTrailParticle, addShake, flashScreen
+} from './particles.js';
+import {
+  updatePrismUI, updatePlutoniumUI, updateMoveUI, updateTimerUI, updateComboUI,
+  showMessage, playTypewriterTitle, groupMemberCount, refreshGroupingIndicator, setGroupingUI
+} from './ui.js';
+import {
+  enemyBFS, findEnemySpawnKey, checkEnemiesTrappedWin, startEnemyRoll, loseLife, updateLivesUI
+} from './enemies.js';
 
-const audio = new AudioEngine();
+// Re-exported for enemies.js (circular import; resolved at call time, never at module eval).
+export { getBlocksInColumn, respawnPlayer, completeLevel };
 
-/* ═══ GAME & EDITOR STATE ═══ */
-let currentLevelIdx = 0;
-let premadeLevels = []; // raw JSON strings fetched from /level (1.json, 2.json, …)
-let customLevels = []; // Array of Level3D loaded from LocalStorage
-let activeLevel = null; // Current playing Level3D
-let levelSnapshot = null; // Serialized pristine state, used for full reset on death/restart
-
-let activeBlocks = new Map(); // key -> block representation
-let activePrisms = new Map(); // key -> prism representation
-let movingPlatformsList = [];
-let ridingPlatform = null; // mover the player is currently locked onto (sticky)
-let ridingOffset = new THREE.Vector3(); // fixed cube offset from the mover while riding
-let switchMap = new Map(); // switchKey -> [targetKeys]
-let teleporterMap = new Map(); // tpKey -> targetTpKey
-let switchStates = new Map(); // key -> activeState
-
-let playerGridPos = { x:0, y:0, z:0 };
-let playerCube = null;
-let exitPos = { x:0, y:0, z:0 };
-let exitRing = null;
-
-let isRolling = false;
-let isBalancing = false;
-let isTeleporting = false;
-let isFalling = false;
-let isLevelComplete = false;
-let isMini = false;
-let isCustomLevel = false;
-let isHelpOpen = false;
-// X-ray view (toggled with T): renders all blocks see-through so the player can
-// reveal level structure hidden behind nearer geometry from the fixed camera.
-let xrayMode = false;
+/* ═══ TRUE CONSTANTS (all mutable state lives on the S object in state.js) ═══ */
 const XRAY_OPACITY = 0.3;
-
-// Pause + free orbit (toggled with P): freezes the game and lets the player
-// orbit the camera 360° around the (centred) cube — drag to rotate, wheel or
-// pinch to zoom. Works with mouse and touch.
-let isPaused = false;
-let pauseYaw = 0.72, pausePitch = 0.675, pauseZoom = 13.6;
-const pausePointers = new Map(); // pointerId → {x,y} for drag + pinch
-let pausePinchDist = null;
-
-let balanceDir = null;
-let balanceTimer = 0;
-let lastMoveDir = { x:0, z:0 };
-const keysPressed = {};
-// Held-direction auto-repeat while playing: roll one cell every 300ms.
-let repeatMoveCode = null;            // the movement key currently held for repeat
-let repeatMoveDir = { x:0, z:0 };
-let moveRepeatTimer = 0;
 const MOVE_REPEAT_MS = 300;
-let rollStartGridPos = { x:0, y:0, z:0 };
-let rollPreState = null; // snapshot of move/combo bookkeeping so a mid-step reverse can undo it
-let boosterMovesActive = 0;
-let moveCount = 0;
-let placedBlocksCount = 0;
-let gameTimer = 0;
-let comboCount = 0;
-let comboTimer = 0;
-let elapsedTime = 0;
-let miniTimer = 0;
-let isCarryingPlutonium = 0;
-let plutoniumTimer = 30.0;
-let depositedPlutonium = 0;
-let containerMeshes = [];
-let hasCollectedPlutoniumThisRun = false;
-let plutoniumWarningSoundTimer = 0.0;
-let fallVelY = 0;
-
-let cameraTarget = new THREE.Vector3(2, 0, 2);
-let cameraLookAt = new THREE.Vector3(2, 0, 2);
-let cameraShake = new THREE.Vector3();
-let shakeIntensity = 0;
-
-// Gameplay "peek": hold left mouse and drag to nudge the view a little; the
-// offsets ease back to the default angle the moment the button is released.
-let peekActive = false;
-let peekLast = { x: 0, y: 0 };
-let peekYaw = 0;    // horizontal nudge (radians), eased back to 0
-let peekPitch = 0;  // vertical nudge (radians), eased back to 0
-
-let animStartTime = 0;
-let animStartPos = new THREE.Vector3();
-let animEndPos = new THREE.Vector3();
-let animStartQuat = new THREE.Quaternion();
-let animDeltaQuat = new THREE.Quaternion();
-let animAxis = new THREE.Vector3();
-let animFromEdge = false;
-// When a roll begins while riding a moving platform, the roll is anchored to
-// that platform's frame: rollCarrier is the mover and rollCarrierStart its
-// position at roll start, so the platform's motion during the roll is added on
-// top of the (straight, platform-relative) roll.
-let rollCarrier = null;
-let rollCarrierStart = new THREE.Vector3();
-
-const particles = [];
-const trailParts = [];
-let trailTimer = 0;
-let completeAnimStartTime = 0;
-let completeTimeoutId = null;
-
-/* ═══ ENEMY STATE ═══ */
-// Enemies are placed in the editor (Level3D.enemies) and may appear multiple
-// times. Each live enemy is its own object so several can chase at once.
-let enemies = [];              // live chasers spawned during gameplay/playtest
-let enemyMarkers = new Map();  // key -> mesh, static markers shown in pure edit mode
 const ENEMY_MOVE_INTERVAL = 0.38;
-
-/* ═══ LIVES STATE ═══ */
-let playerLives = 5;
-const MAX_LIVES = 5;
-let playerInvincible = false;
-let playerInvincibleTimer = 0;
-const PLAYER_INVINCIBLE_DURATION = 2.2;
-
-/* ═══════════════════════════════════════════════════════════
-   LEVEL EDITOR STATE
-   ═══════════════════════════════════════════════════════════ */
-let isEditMode = false;
-let selectedTool = 'normal'; // normal, fragile, ice, switch, bridge, teleporter, moving, start, exit, prism, miniprism, linker, eraser
-let editY = 0;
-let editorGridHelper = null;
-let editorGridPlane = null;
-let editorGhostBlock = null;
-let editorWiresGroup = null;
-let sliceModeActive = false; // layer slicing off by default in the editor
 const rulerMinY = -3, rulerMaxY = 10;
-
-let editorCameraTarget = new THREE.Vector3(0, 0, 0);
-let editorCameraYaw = Math.PI/4;
-let editorCameraPitch = 0.8; 
-let editorCameraZoom = 15;
-let isDraggingCamera = false;
-let dragStartMouse = { x:0, y:0 };
-let isPainting = false;
-let rightDragMoved = false; // suppress erase-on-release after a camera drag
-
-let isDrawingPlane = false;
-let planeStartPos = null;
-let planeEndPos = null;
-let editorPlanePreview = null;
-
-let linkerSourceKey = null; // Stored switch/tp for linking
-
-// Compound objects: while "O" is held, every block placed is tagged with the
-// same group id (stored in block.properties.group). Linking a switch/plate to
-// any grouped block expands the trigger to all triggerable members.
-let currentGroupId = null; // active group id while O is held, else null
-
-// Editor undo history — serialized level snapshots, newest last (max 250).
-let undoStack = [];
 const UNDO_LIMIT = 250;
-
-// Batch editing state (suppresses expensive slicing/wire draws/rebuilds during loops)
-let batchEditing = false;
-let batchRebuildNeeded = false;
 
 
 /* ═══════════════════════════════════════════════════════════
@@ -185,89 +50,84 @@ function clearLevel() {
       g.remove(c);
     }
   });
-  if (playerCube) { worldGroup.remove(playerCube); playerCube = null; }
-  if (exitRing) { worldGroup.remove(exitRing); exitRing = null; }
-  enemies.forEach(en => { worldGroup.remove(en.cube); disposeMaterial(en.cube.material); });
-  enemies = [];
-  enemyMarkers.clear(); // marker meshes live in prismsGroup, disposed by the group loop above
-  particles.length = 0; trailParts.length = 0;
+  if (S.playerCube) { worldGroup.remove(S.playerCube); S.playerCube = null; }
+  if (S.exitRing) { worldGroup.remove(S.exitRing); S.exitRing = null; }
+  S.enemies.forEach(en => { worldGroup.remove(en.cube); disposeMaterial(en.cube.material); });
+  S.enemies = [];
+  S.enemyMarkers.clear(); // marker meshes live in prismsGroup, disposed by the group loop above
+  S.particles.length = 0; S.trailParts.length = 0;
 
-  movingPlatformsList.forEach(mp => mp.dispose());
-  movingPlatformsList = [];
-  ridingPlatform = null;
-  rollCarrier = null;
-  activeBlocks.clear();
-  activePrisms.clear();
-  containerMeshes = [];
-  switchMap.clear();
-  teleporterMap.clear();
-  switchStates.clear();
-  linkerSourceKey = null;
-  currentGroupId = null;
-  completeAnimStartTime = 0;
+  S.movingPlatformsList.forEach(mp => mp.dispose());
+  S.movingPlatformsList = [];
+  S.ridingPlatform = null;
+  S.rollCarrier = null;
+  S.activeBlocks.clear();
+  S.activePrisms.clear();
+  S.containerMeshes = [];
+  S.switchMap.clear();
+  S.teleporterMap.clear();
+  S.switchStates.clear();
+  S.linkerSourceKey = null;
+  S.currentGroupId = null;
+  S.completeAnimStartTime = 0;
   if (typeof starfield !== 'undefined' && starfield) {
     starfield.scale.setScalar(1.0);
     starfield.rotation.set(0, 0, 0);
   }
   // A rebuild (level change / restart) clears any active pause.
-  if (isPaused) { isPaused = false; document.getElementById('pause-overlay')?.classList.remove('show'); }
-  pausePointers.clear(); pausePinchDist = null;
-}
-
-function getPlayerWorldPos(gx, gy, gz, miniState) {
-  const size = miniState ? CUBE_S * 0.5 : CUBE_S;
-  return new THREE.Vector3(gx, gy + 0.5 + size/2, gz);
+  if (S.isPaused) { S.isPaused = false; document.getElementById('pause-overlay')?.classList.remove('show'); }
+  S.pausePointers.clear(); S.pausePinchDist = null;
 }
 
 function buildLevel3D(level3D) {
   clearLevel();
-  isCarryingPlutonium = 0;
-  plutoniumTimer = level3D.plutoniumTimeLimit ?? 30.0;
-  depositedPlutonium = 0;
-  hasCollectedPlutoniumThisRun = false;
+  S.isCarryingPlutonium = 0;
+  S.plutoniumTimer = level3D.plutoniumTimeLimit ?? 30.0;
+  S.depositedPlutonium = 0;
+  S.hasCollectedPlutoniumThisRun = false;
   const phud = document.getElementById('plutonium-hud-bar');
   if (phud) phud.style.display = 'none';
 
-  activeLevel = level3D;
-  levelSnapshot = serializeLevel(level3D);
+  S.activeLevel = level3D;
+  S.levelSnapshot = serializeLevel(level3D);
   const world = WORLDS[level3D.world];
 
   scene.background = new THREE.Color(world.bg);
   // No fog while editing — zooming out shouldn't darken the level. Fog is kept
   // for normal play and playtesting.
-  scene.fog = (isEditMode && !isPlaytesting) ? null : new THREE.Fog(world.bg, 12, 38);
+  scene.fog = (S.isEditMode && !S.isPlaytesting) ? null : new THREE.Fog(world.bg, 12, 38);
   audio.startAmbient(level3D.world);
 
   // Parse Level Configs (everything starts active; link targets are switched off below)
   level3D.blocks.forEach((b, k) => {
-    activeBlocks.set(k, { ...b, broken: false, active: true });
+    S.activeBlocks.set(k, { ...b, broken: false, active: true });
   });
   level3D.prisms.forEach((p, k) => {
-    activePrisms.set(k, { ...p, collected: false });
+    S.activePrisms.set(k, { ...p, collected: false });
   });
 
   level3D.links.forEach(l => {
     if (l.type === 'switch-trigger') {
-      if (!switchMap.has(l.from)) switchMap.set(l.from, []);
-      switchMap.get(l.from).push(l.to);
-      const target = activeBlocks.get(l.to);
+      if (!S.switchMap.has(l.from)) S.switchMap.set(l.from, []);
+      S.switchMap.get(l.from).push(l.to);
+      const target = S.activeBlocks.get(l.to);
       // Triggered bridges/platforms start off until their switch activates them
       if (target && (target.type === 'bridge' || target.type === 'moving')) target.active = false;
     } else if (l.type === 'teleporter-link') {
-      teleporterMap.set(l.k1, l.k2);
-      teleporterMap.set(l.k2, l.k1);
+      S.teleporterMap.set(l.k1, l.k2);
+      S.teleporterMap.set(l.k2, l.k1);
     }
   });
 
   // Render Blocks
-  activeBlocks.forEach((block, key) => {
+  S.activeBlocks.forEach((block, key) => {
     if (block.type === 'moving') {
       const mp = new MovingPlatform(
         key, block.x, block.y, block.z,
         block.properties.targetX ?? block.x, block.properties.targetY ?? block.y, block.properties.targetZ ?? block.z,
         block.properties.speed ?? 1.5, block.active !== false
       );
-      movingPlatformsList.push(mp);
+      S.movingPlatformsList.push(mp);
       block.platformInstance = mp;
       return;
     }
@@ -278,7 +138,7 @@ function buildLevel3D(level3D) {
   // object. Every other member of that group rides along as a passenger so the
   // entire structure translates together — not just the single moving tile.
   const groupMembers = new Map();
-  activeBlocks.forEach(b => {
+  S.activeBlocks.forEach(b => {
     const g = b.properties && b.properties.group;
     if (g === undefined || g === null) return;
     if (!groupMembers.has(g)) groupMembers.set(g, []);
@@ -303,32 +163,32 @@ function buildLevel3D(level3D) {
   });
 
   // Render Prisms
-  activePrisms.forEach((p, key) => createPrismMesh(key, p));
+  S.activePrisms.forEach((p, key) => createPrismMesh(key, p));
 
   // Goal exit
-  exitPos = { ...level3D.exit };
-  exitRing = new THREE.Mesh(geoRing, new THREE.MeshStandardMaterial({
+  S.exitPos = { ...level3D.exit };
+  S.exitRing = new THREE.Mesh(geoRing, new THREE.MeshStandardMaterial({
     color:'#00ffaa', roughness:0.15, metalness:0.4, emissive:'#00ff88', emissiveIntensity:1.2,
   }));
-  exitRing.rotation.x = -Math.PI/2;
-  exitRing.position.set(exitPos.x, exitPos.y + 0.5, exitPos.z);
-  exitRing.scale.set(0.01, 0.01, 0.01);
-  worldGroup.add(exitRing);
+  S.exitRing.rotation.x = -Math.PI/2;
+  S.exitRing.position.set(S.exitPos.x, S.exitPos.y + 0.5, S.exitPos.z);
+  S.exitRing.scale.set(0.01, 0.01, 0.01);
+  worldGroup.add(S.exitRing);
 
   // Player cube
-  playerGridPos = { ...level3D.start };
-  isMini = false; miniTimer = 0;
-  playerCube = new THREE.Mesh(geoCube, matCube.clone());
-  playerCube.position.copy(getPlayerWorldPos(playerGridPos.x, playerGridPos.y, playerGridPos.z, false));
-  playerCube.castShadow = true; playerCube.receiveShadow = true;
-  worldGroup.add(playerCube);
+  S.playerGridPos = { ...level3D.start };
+  S.isMini = false; S.miniTimer = 0;
+  S.playerCube = new THREE.Mesh(geoCube, matCube.clone());
+  S.playerCube.position.copy(getPlayerWorldPos(S.playerGridPos.x, S.playerGridPos.y, S.playerGridPos.z, false));
+  S.playerCube.castShadow = true; S.playerCube.receiveShadow = true;
+  worldGroup.add(S.playerCube);
 
   // Enemies – placed in the editor. During gameplay/playtest each spawn point
   // becomes a live chaser; in pure edit mode we show a static marker instead.
-  if (!isEditMode || isPlaytesting) {
+  if (!S.isEditMode || S.isPlaytesting) {
     if (level3D.enemies.size > 0) {
       level3D.enemies.forEach((e, key) => spawnEnemy(key));
-    } else if (!isCustomLevel && !isEditMode) {
+    } else if (!S.isCustomLevel && !S.isEditMode) {
       // Built-in campaign levels predate enemy placement — keep their original
       // single auto-spawned chaser at the most distant reachable cell.
       spawnEnemy(findEnemySpawnKey());
@@ -336,26 +196,26 @@ function buildLevel3D(level3D) {
   } else {
     level3D.enemies.forEach((e, key) => createEnemyMarker(key));
   }
-  playerInvincible = false;
-  playerInvincibleTimer = 0;
+  S.playerInvincible = false;
+  S.playerInvincibleTimer = 0;
 
-  cameraTarget.copy(playerCube.position);
-  cameraLookAt.copy(playerCube.position);
+  S.cameraTarget.copy(S.playerCube.position);
+  S.cameraLookAt.copy(S.playerCube.position);
 
-  moveCount = 0; elapsedTime = 0; gameTimer = 0; comboCount = 0; comboTimer = 0;
-  isRolling = false; isBalancing = false; isTeleporting = false; isFalling = false; isLevelComplete = false;
+  S.moveCount = 0; S.elapsedTime = 0; S.gameTimer = 0; S.comboCount = 0; S.comboTimer = 0;
+  S.isRolling = false; S.isBalancing = false; S.isTeleporting = false; S.isFalling = false; S.isLevelComplete = false;
 
   document.getElementById('world-name').textContent = world.name.toUpperCase();
   playTypewriterTitle(document.getElementById('level-name'), level3D.name);
-  document.getElementById('level-number').textContent = isEditMode ? 'E' : (isCustomLevel ? 'C' : currentLevelIdx + 1);
-  placedBlocksCount = 0;
+  document.getElementById('level-number').textContent = S.isEditMode ? 'E' : (S.isCustomLevel ? 'C' : S.currentLevelIdx + 1);
+  S.placedBlocksCount = 0;
   updatePrismUI(); updatePlutoniumUI(); updateMoveUI(); updateTimerUI(); updateBuildUI();
   if (document.getElementById('level-build-limit-input')) {
     document.getElementById('level-build-limit-input').value = level3D.buildBlocksLimit ?? 10;
   }
   document.getElementById('mini-hud-bar').style.display = 'none';
 
-  spawnEntranceParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
+  spawnEntranceParticles(S.playerGridPos.x, S.playerGridPos.y, S.playerGridPos.z);
   updatePressurePlates();
   updateLivesUI();
   updateEditorSlicing();
@@ -368,7 +228,7 @@ function buildLevel3D(level3D) {
   // no occluders, and leave blocks opaque — which is why the effect only kicked
   // in "ab und zu" after a restart.
   worldGroup.updateMatrixWorld(true);
-  transparencyUpdateTimer = 0;
+  S.transparencyUpdateTimer = 0;
   updateDynamicTransparency();
 }
 
@@ -377,7 +237,7 @@ function createBlockMesh(block, key) {
   const isInactiveBridge = type === 'bridge' && !active;
   // Inactive bridges are hidden in play, but shown as ghosts in the editor
   // so they can be selected and linked.
-  if (isInactiveBridge && (!isEditMode || isPlaytesting)) return;
+  if (isInactiveBridge && (!S.isEditMode || S.isPlaytesting)) return;
 
   let mat = matTileBase;
   if (type === 'fragile') mat = matTileFragile;
@@ -392,7 +252,7 @@ function createBlockMesh(block, key) {
   else if (type === 'booster') mat = matBooster;
   else if (type === 'container') mat = matContainer;
 
-  const isExit = (x === exitPos.x && y === exitPos.y && z === exitPos.z);
+  const isExit = (x === S.exitPos.x && y === S.exitPos.y && z === S.exitPos.z);
   if (isExit) mat = matTileExit;
 
   // Thin bridge visual or cube for container
@@ -448,7 +308,7 @@ function createBlockMesh(block, key) {
 
   if (type === 'container') {
     mesh.scale.set(0.8, 0.8, 0.8);
-    containerMeshes.push(mesh);
+    S.containerMeshes.push(mesh);
   }
 
   // Switch pillar
@@ -526,7 +386,7 @@ function spawnEnemy(key) {
   cube.castShadow = true; cube.receiveShadow = true;
   cube.position.copy(getPlayerWorldPos(x, y, z, false));
   worldGroup.add(cube);
-  enemies.push({
+  S.enemies.push({
     cube,
     grid: { x, y, z },
     isRolling: false,
@@ -536,11 +396,11 @@ function spawnEnemy(key) {
     animStartQuat: new THREE.Quaternion(),
     animDeltaQuat: new THREE.Quaternion(),
     moveTimer: 1.5,                 // brief head start before the chase begins
-    hue: Math.random()             // desync the rainbow cycle between enemies
+    hue: Math.random()             // desync the rainbow cycle between S.enemies
   });
 }
 
-// A static editor marker so the designer can see/erase placed enemies. Kept
+// A static editor marker so the designer can see/erase placed S.enemies. Kept
 // opaque (no transparency render-order surprises) with a bright edge cage so it
 // reads clearly as an enemy spawn point.
 function createEnemyMarker(key) {
@@ -558,225 +418,7 @@ function createEnemyMarker(key) {
   );
   mesh.add(edge);
   prismsGroup.add(mesh);
-  enemyMarkers.set(key, mesh);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   PARTICLES & EFFECTS
-   ═══════════════════════════════════════════════════════════ */
-function spawnEntranceParticles(gx, gy, gz) {
-  const pos = getPlayerWorldPos(gx, gy, gz, false);
-  for (let i=0;i<20;i++) {
-    const mat = new THREE.MeshBasicMaterial({ color:'#ff8844', transparent:true, opacity:1 });
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.03,4,4), mat);
-    p.position.copy(pos);
-    p.position.x += (Math.random()-0.5)*0.6;
-    p.position.z += (Math.random()-0.5)*0.6;
-    p.userData = { vel:new THREE.Vector3((Math.random()-0.5)*2, Math.random()*3+1, (Math.random()-0.5)*2), life:0.6+Math.random()*0.5, age:0 };
-    effectsGroup.add(p); particles.push(p);
-  }
-}
-
-function spawnCollectParticles(wPos) {
-  for (let i=0;i<14;i++) {
-    const mat = new THREE.MeshBasicMaterial({ color:'#ffdd44', transparent:true, opacity:1 });
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.04,4,4), mat);
-    p.position.copy(wPos);
-    p.userData = { vel:new THREE.Vector3((Math.random()-0.5)*3, Math.random()*4+1.5, (Math.random()-0.5)*3), life:0.5+Math.random()*0.4, age:0 };
-    effectsGroup.add(p); particles.push(p);
-  }
-}
-
-function spawnBreakParticles(gx, gy, gz) {
-  const pos = new THREE.Vector3(gx, gy, gz);
-  for (let i=0;i<16;i++) {
-    const mat = new THREE.MeshBasicMaterial({ color:'#884444', transparent:true, opacity:1 });
-    const p = new THREE.Mesh(new THREE.BoxGeometry(0.08+Math.random()*0.1, 0.06, 0.08+Math.random()*0.1), mat);
-    p.position.copy(pos);
-    p.position.x += (Math.random()-0.5)*0.5;
-    p.position.z += (Math.random()-0.5)*0.5;
-    p.userData = { vel:new THREE.Vector3((Math.random()-0.5)*2.5, Math.random()*2.5+0.5, (Math.random()-0.5)*2.5), life:0.5+Math.random()*0.6, age:0 };
-    effectsGroup.add(p); particles.push(p);
-  }
-}
-
-function spawnLandingParticles(gx, gy, gz) {
-  const pos = new THREE.Vector3(gx, gy + 0.5, gz);
-  for (let i=0;i<12;i++) {
-    const mat = new THREE.MeshBasicMaterial({ color:'#ffffff', transparent:true, opacity:0.8 });
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.03,4,4), mat);
-    p.position.copy(pos);
-    p.userData = { vel:new THREE.Vector3((Math.random()-0.5)*3, Math.random()*2+1, (Math.random()-0.5)*3), life:0.4+Math.random()*0.3, age:0 };
-    effectsGroup.add(p); particles.push(p);
-  }
-}
-
-function spawnTeleportParticles(gx, gy, gz) {
-  const pos = new THREE.Vector3(gx, gy + 0.5, gz);
-  for (let i=0;i<20;i++) {
-    const mat = new THREE.MeshBasicMaterial({ color:'#9966ff', transparent:true, opacity:1 });
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.04,4,4), mat);
-    p.position.copy(pos);
-    p.userData = { vel:new THREE.Vector3((Math.random()-0.5)*4, Math.random()*3+2, (Math.random()-0.5)*4), life:0.3+Math.random()*0.4, age:0 };
-    effectsGroup.add(p); particles.push(p);
-  }
-}
-
-function spawnPlutoniumDepositParticles(gx, gy, gz) {
-  const pos = new THREE.Vector3(gx, gy + 0.5, gz);
-  const colors = ['#d946ef', '#a21caf', '#701a75', '#ffffff'];
-  for (let i = 0; i < 35; i++) {
-    const color = colors[Math.floor(Math.random() * colors.length)];
-    const mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 1.0 });
-    const size = 0.03 + Math.random() * 0.05;
-    const p = new THREE.Mesh(new THREE.SphereGeometry(size, 4, 4), mat);
-    p.position.copy(pos);
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 1.5 + Math.random() * 4.5;
-    const vel = new THREE.Vector3(
-      Math.cos(angle) * speed,
-      Math.random() * 6.0 + 3.0,
-      Math.sin(angle) * speed
-    );
-    p.userData = { vel: vel, life: 0.6 + Math.random() * 0.6, age: 0 };
-    effectsGroup.add(p);
-    particles.push(p);
-  }
-}
-
-function spawnLevelCompleteExplosion() {
-  const colors = ['#ff0055', '#00ffaa', '#ffaa00', '#00ccff', '#ff00ff', '#ffff00', '#ffffff'];
-  const pos = new THREE.Vector3(exitPos.x, exitPos.y + 0.5, exitPos.z);
-  for (let i = 0; i < 120; i++) {
-    const color = colors[Math.floor(Math.random() * colors.length)];
-    const mat = new THREE.MeshBasicMaterial({
-      color: color,
-      transparent: true,
-      opacity: 1.0,
-      blending: THREE.AdditiveBlending
-    });
-    const geo = new THREE.OctahedronGeometry(0.08 + Math.random() * 0.08, 0);
-    const p = new THREE.Mesh(geo, mat);
-    p.position.copy(pos);
-    
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(2 * Math.random() - 1);
-    const speed = 4 + Math.random() * 7;
-    const vel = new THREE.Vector3(
-      Math.sin(phi) * Math.cos(theta) * speed,
-      Math.sin(phi) * Math.sin(theta) * speed + 2,
-      Math.cos(phi) * speed
-    );
-    
-    p.userData = {
-      vel: vel,
-      life: 1.5 + Math.random() * 1.0,
-      age: 0,
-      spin: new THREE.Vector3(Math.random() * 10, Math.random() * 10, Math.random() * 10)
-    };
-    effectsGroup.add(p);
-    particles.push(p);
-  }
-}
-
-function spawnTrailParticle() {
-  if (!playerCube) return;
-  const p = new THREE.Mesh(geoTrail, new THREE.MeshBasicMaterial({ color:'#ff8844', transparent:true, opacity:0.5 }));
-  p.position.copy(playerCube.position);
-  p.userData = { life:0.3, age:0 };
-  effectsGroup.add(p); trailParts.push(p);
-}
-
-function addShake(intensity) { shakeIntensity = Math.max(shakeIntensity, intensity); }
-function flashScreen(color) {
-  const flash = document.getElementById('fall-flash');
-  flash.style.background = `radial-gradient(circle, ${color} 0%, transparent 60%)`;
-  flash.classList.add('active');
-  setTimeout(() => flash.classList.remove('active'), 140);
-}
-
-/* ═══════════════════════════════════════════════════════════
-   UI CONTROLS
-   ═══════════════════════════════════════════════════════════ */
-function updatePrismUI() {
-  let collect = 0; let total = 0;
-  activePrisms.forEach(p => {
-    if (p.type !== 'miniprism' && p.type !== 'plutonium') {
-      total++; if (p.collected) collect++;
-    }
-  });
-  document.getElementById('prism-count').textContent = `${collect}/${total}`;
-}
-function updatePlutoniumUI() {
-  let totalPlutonium = 0;
-  activePrisms.forEach(p => {
-    if (p.type === 'plutonium') totalPlutonium++;
-  });
-  const display = document.getElementById('plutonium-display');
-  if (display) {
-    if (totalPlutonium > 0) {
-      display.style.display = 'flex';
-      document.getElementById('plutonium-count').textContent = `${depositedPlutonium}/${totalPlutonium}`;
-    } else {
-      display.style.display = 'none';
-    }
-  }
-}
-function updateMoveUI() { document.getElementById('move-counter').textContent = `${moveCount} move${moveCount!==1?'s':''}`; }
-function updateTimerUI() {
-  const mins = Math.floor(elapsedTime / 60);
-  const secs = Math.floor(elapsedTime % 60);
-  document.getElementById('timer-display').textContent = `${mins}:${String(secs).padStart(2,'0')}`;
-}
-function updateComboUI() {
-  const el = document.getElementById('combo-count');
-  const lbl = document.getElementById('combo-label');
-  if (comboCount >= 3) {
-    el.textContent = `x${comboCount}`;
-    el.classList.add('active'); lbl.classList.add('active');
-  } else {
-    el.classList.remove('active'); lbl.classList.remove('active');
-  }
-}
-function showMessage(text, dur=2) {
-  const el = document.getElementById('message');
-  el.textContent = text; el.classList.add('visible');
-  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('visible'), dur*1000);
-}
-
-let typewriterInterval = null;
-function playTypewriterTitle(el, text) {
-  if (typewriterInterval) clearInterval(typewriterInterval);
-  el.textContent = '';
-  let i = 0;
-  typewriterInterval = setInterval(() => {
-    if (i < text.length) {
-      el.textContent += text[i];
-      audio.playTypewriterTick();
-      i++;
-    } else {
-      clearInterval(typewriterInterval);
-      typewriterInterval = null;
-    }
-  }, 45);
-}
-
-// ── Compound-object grouping indicator (active while O is held) ──
-function groupMemberCount(gid) {
-  if (gid === null || gid === undefined || !activeLevel) return 0;
-  let n = 0;
-  activeLevel.blocks.forEach(b => { if (b.properties && b.properties.group === gid) n++; });
-  return n;
-}
-function refreshGroupingIndicator() {
-  const el = document.getElementById('group-count');
-  if (!el) return;
-  const n = groupMemberCount(currentGroupId);
-  el.textContent = `${n} block${n === 1 ? '' : 's'}`;
-}
-function setGroupingUI(active) {
-  document.getElementById('grouping-indicator').classList.toggle('active', active);
-  document.getElementById('grouping-vignette').classList.toggle('active', active);
+  S.enemyMarkers.set(key, mesh);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -784,7 +426,7 @@ function setGroupingUI(active) {
    ═══════════════════════════════════════════════════════════ */
 function getBlocksInColumn(gx, gz) {
   const list = [];
-  activeBlocks.forEach((block, key) => {
+  S.activeBlocks.forEach((block, key) => {
     // Moving drivers and compound-object passengers have dynamic positions —
     // they are reported from the platform loop below, not their static cell.
     if (block.type === 'moving' || block.isPassenger) return;
@@ -793,7 +435,7 @@ function getBlocksInColumn(gx, gz) {
     }
   });
   // Check moving platforms (driver tile + any carried passengers)
-  movingPlatformsList.forEach(mp => {
+  S.movingPlatformsList.forEach(mp => {
     if (mp.isPassenger) return; // carried by another driver
     const mpgx = Math.round(mp.position.x);
     const mpgz = Math.round(mp.position.z);
@@ -812,22 +454,22 @@ function getBlocksInColumn(gx, gz) {
 }
 
 function checkRidingPlatform() {
-  if (isRolling || isFalling || isTeleporting) return null;
+  if (S.isRolling || S.isFalling || S.isTeleporting) return null;
   // If player stands exactly on a moving platform — its driver tile or any
   // passenger cell of a compound object.
-  for (const mp of movingPlatformsList) {
+  for (const mp of S.movingPlatformsList) {
     if (mp.isPassenger) continue;
     const mpgx = Math.round(mp.position.x);
     const mpgy = Math.round(mp.position.y);
     const mpgz = Math.round(mp.position.z);
-    if (playerGridPos.x === mpgx && playerGridPos.z === mpgz && playerGridPos.y === mpgy) {
+    if (S.playerGridPos.x === mpgx && S.playerGridPos.z === mpgz && S.playerGridPos.y === mpgy) {
       return mp;
     }
     for (const m of mp.members) {
       const cx = Math.round(mp.position.x + m.gridOffset.x);
       const cy = Math.round(mp.position.y + m.gridOffset.y);
       const cz = Math.round(mp.position.z + m.gridOffset.z);
-      if (playerGridPos.x === cx && playerGridPos.z === cz && playerGridPos.y === cy) {
+      if (S.playerGridPos.x === cx && S.playerGridPos.z === cz && S.playerGridPos.y === cy) {
         return mp;
       }
     }
@@ -838,14 +480,14 @@ function checkRidingPlatform() {
 // If a moving block is advancing into the player's cell (same level, player not
 // riding it), the block shoves the player along its travel direction.
 function checkPushedByPlatform() {
-  if (isRolling || isFalling || isTeleporting || isBalancing) return null;
-  for (const mp of movingPlatformsList) {
+  if (S.isRolling || S.isFalling || S.isTeleporting || S.isBalancing) return null;
+  for (const mp of S.movingPlatformsList) {
     if (mp.isPassenger || !mp.active) continue;
     if (mp.moveDir.x === 0 && mp.moveDir.y === 0 && mp.moveDir.z === 0) continue;
     const tc = mp.targetCell;
-    if (playerGridPos.x === Math.round(tc.x) &&
-        playerGridPos.y === Math.round(tc.y) &&
-        playerGridPos.z === Math.round(tc.z)) {
+    if (S.playerGridPos.x === Math.round(tc.x) &&
+        S.playerGridPos.y === Math.round(tc.y) &&
+        S.playerGridPos.z === Math.round(tc.z)) {
       return mp;
     }
   }
@@ -853,19 +495,19 @@ function checkPushedByPlatform() {
 }
 
 function enterBalancing() {
-  isBalancing = true;
-  balanceTimer = 1.5;
+  S.isBalancing = true;
+  S.balanceTimer = 1.5;
   audio.playBalanceStart();
   showMessage('GOOSE HANGING! HOLD KEY OR ROLL BACK', 1.2);
 
   // Position at midpoint of the roll
-  const midPos = new THREE.Vector3().addVectors(animStartPos, animEndPos).multiplyScalar(0.5);
+  const midPos = new THREE.Vector3().addVectors(S.animStartPos, S.animEndPos).multiplyScalar(0.5);
   midPos.y += CUBE_S * 0.15; // sit on the edge
-  playerCube.position.copy(midPos);
+  S.playerCube.position.copy(midPos);
 
-  const midQuat = animStartQuat.clone();
-  midQuat.slerp(new THREE.Quaternion().multiplyQuaternions(animDeltaQuat, animStartQuat), 0.5);
-  playerCube.quaternion.copy(midQuat);
+  const midQuat = S.animStartQuat.clone();
+  midQuat.slerp(new THREE.Quaternion().multiplyQuaternions(S.animDeltaQuat, S.animStartQuat), 0.5);
+  S.playerCube.quaternion.copy(midQuat);
 }
 
 function executePush(block, toX, toY, toZ, dirX, dirZ) {
@@ -876,8 +518,8 @@ function executePush(block, toX, toY, toZ, dirX, dirZ) {
   const landing = colBlocks.find(b => b.y < toY);
   const finalY = landing ? landing.y + 1 : -10;
 
-  activeBlocks.delete(oldKey);
-  activeLevel.blocks.delete(oldKey);
+  S.activeBlocks.delete(oldKey);
+  S.activeLevel.blocks.delete(oldKey);
   const newKey = `${toX},${finalY},${toZ}`;
   
   block.x = toX;
@@ -885,8 +527,8 @@ function executePush(block, toX, toY, toZ, dirX, dirZ) {
   block.z = toZ;
   
   if (finalY > -5) {
-    activeBlocks.set(newKey, block);
-    activeLevel.blocks.set(newKey, { x: toX, y: finalY, z: toZ, type: 'pushable', properties: block.properties || {} });
+    S.activeBlocks.set(newKey, block);
+    S.activeLevel.blocks.set(newKey, { x: toX, y: finalY, z: toZ, type: 'pushable', properties: block.properties || {} });
   }
 
   const mesh = block.mesh;
@@ -940,11 +582,11 @@ function executePush(block, toX, toY, toZ, dirX, dirZ) {
 }
 
 function updatePressurePlates() {
-  activeBlocks.forEach((block, key) => {
+  S.activeBlocks.forEach((block, key) => {
     if (block.type === 'pressureplate') {
-      const playerOnIt = (playerGridPos.x === block.x && playerGridPos.y === block.y && playerGridPos.z === block.z && !isRolling && !isFalling && !isTeleporting);
+      const playerOnIt = (S.playerGridPos.x === block.x && S.playerGridPos.y === block.y && S.playerGridPos.z === block.z && !S.isRolling && !S.isFalling && !S.isTeleporting);
       let blockOnIt = false;
-      activeBlocks.forEach(b => {
+      S.activeBlocks.forEach(b => {
         // A crate resting ON the plate sits one cell above it
         if (b.type === 'pushable' && b.x === block.x && b.y === block.y + 1 && b.z === block.z) {
           blockOnIt = true;
@@ -952,10 +594,10 @@ function updatePressurePlates() {
       });
 
       const shouldBeActive = playerOnIt || blockOnIt;
-      const isCurrentlyActive = switchStates.get(key) || false;
+      const isCurrentlyActive = S.switchStates.get(key) || false;
 
       if (shouldBeActive !== isCurrentlyActive) {
-        switchStates.set(key, shouldBeActive);
+        S.switchStates.set(key, shouldBeActive);
         if (shouldBeActive) {
           audio.playPlatePress();
         } else {
@@ -972,7 +614,7 @@ function updatePressurePlates() {
 }
 
 function triggerSwitchTargets(key, activeState) {
-  const targets = switchMap.get(key);
+  const targets = S.switchMap.get(key);
   if (!targets) return;
 
   if (activeState) {
@@ -982,7 +624,7 @@ function triggerSwitchTargets(key, activeState) {
   }
 
   targets.forEach(tk => {
-    const block = activeBlocks.get(tk);
+    const block = S.activeBlocks.get(tk);
     if (!block) return;
     if (block.type === 'bridge') {
       block.active = activeState;
@@ -1020,32 +662,32 @@ function triggerSwitchTargets(key, activeState) {
 }
 
 function executeRollBack() {
-  isBalancing = false;
+  S.isBalancing = false;
   audio.playBalanceStop();
   audio.playRoll();
 
-  playerGridPos = { ...rollStartGridPos };
-  isRolling = true;
-  animStartTime = performance.now()/1000;
-  animStartPos.copy(playerCube.position);
-  animEndPos.copy(getPlayerWorldPos(playerGridPos.x, playerGridPos.y, playerGridPos.z, isMini));
-  animStartQuat.copy(playerCube.quaternion);
+  S.playerGridPos = { ...S.rollStartGridPos };
+  S.isRolling = true;
+  S.animStartTime = performance.now()/1000;
+  S.animStartPos.copy(S.playerCube.position);
+  S.animEndPos.copy(getPlayerWorldPos(S.playerGridPos.x, S.playerGridPos.y, S.playerGridPos.z, S.isMini));
+  S.animStartQuat.copy(S.playerCube.quaternion);
   
-  animAxis.negate();
-  animDeltaQuat.setFromAxisAngle(animAxis, Math.PI/4); // 45 degrees back
-  playerCube.userData.rollAction = 'roll-back';
+  S.animAxis.negate();
+  S.animDeltaQuat.setFromAxisAngle(S.animAxis, Math.PI/4); // 45 degrees back
+  S.playerCube.userData.rollAction = 'roll-back';
 }
 
 // Whether the in-progress step can be aborted and rolled back to its origin
 // cell. Limited to plain ground moves on static terrain so reversing is always
 // safe (no half-pushed crates, no broken fragile origin, no platform drift).
 function canReverseRoll() {
-  if (!isRolling || !playerCube) return false;
-  const action = playerCube.userData.rollAction;
+  if (!S.isRolling || !S.playerCube) return false;
+  const action = S.playerCube.userData.rollAction;
   if (action !== 'roll' && action !== 'climb' && action !== 'descend') return false;
-  if (rollCarrier) return false;                       // platform-relative rolls
-  if (playerCube.userData.rollPushedCrate) return false;
-  const origin = activeBlocks.get(`${rollStartGridPos.x},${rollStartGridPos.y},${rollStartGridPos.z}`);
+  if (S.rollCarrier) return false;                       // platform-relative rolls
+  if (S.playerCube.userData.rollPushedCrate) return false;
+  const origin = S.activeBlocks.get(`${S.rollStartGridPos.x},${S.rollStartGridPos.y},${S.rollStartGridPos.z}`);
   if (!origin || origin.broken || origin.type === 'fragile') return false; // origin must still hold us
   return true;
 }
@@ -1053,30 +695,30 @@ function canReverseRoll() {
 // Abort the current step and roll the cube back to the cell it left, so the
 // player can change their mind while a move is still animating.
 function reverseCurrentRoll() {
-  const origStartQuat = animStartQuat.clone();          // orientation at step start
-  const backWorld = getPlayerWorldPos(rollStartGridPos.x, rollStartGridPos.y, rollStartGridPos.z, isMini);
+  const origStartQuat = S.animStartQuat.clone();          // orientation at step start
+  const backWorld = getPlayerWorldPos(S.rollStartGridPos.x, S.rollStartGridPos.y, S.rollStartGridPos.z, S.isMini);
 
-  animStartTime = performance.now()/1000;
-  animStartPos.copy(playerCube.position);               // from the current mid-roll pose …
-  animEndPos.copy(backWorld);                           // … back to the origin cell
-  const curQuat = playerCube.quaternion.clone();
-  animStartQuat.copy(curQuat);
+  S.animStartTime = performance.now()/1000;
+  S.animStartPos.copy(S.playerCube.position);               // from the current mid-roll pose …
+  S.animEndPos.copy(backWorld);                           // … back to the origin cell
+  const curQuat = S.playerCube.quaternion.clone();
+  S.animStartQuat.copy(curQuat);
   // delta * cur === origStart, so the cube settles at its exact pre-step orientation.
-  animDeltaQuat.copy(origStartQuat).multiply(curQuat.clone().invert());
-  animFromEdge = false;
-  rollCarrier = null;
+  S.animDeltaQuat.copy(origStartQuat).multiply(curQuat.clone().invert());
+  S.animFromEdge = false;
+  S.rollCarrier = null;
 
   // Return to the origin cell and roll back the step's bookkeeping.
-  playerGridPos = { ...rollStartGridPos };
-  if (rollPreState) {
-    moveCount = rollPreState.moveCount;
-    comboCount = rollPreState.comboCount;
-    comboTimer = rollPreState.comboTimer;
-    lastMoveDir = { ...rollPreState.lastMoveDir };
+  S.playerGridPos = { ...S.rollStartGridPos };
+  if (S.rollPreState) {
+    S.moveCount = S.rollPreState.moveCount;
+    S.comboCount = S.rollPreState.comboCount;
+    S.comboTimer = S.rollPreState.comboTimer;
+    S.lastMoveDir = { ...S.rollPreState.lastMoveDir };
     updateMoveUI(); updateComboUI();
   }
   audio.playRoll();
-  playerCube.userData.rollAction = 'reverse';
+  S.playerCube.userData.rollAction = 'reverse';
 }
 
 function triggerShakerCrumble(block, key) {
@@ -1099,11 +741,11 @@ function triggerShakerCrumble(block, key) {
     clearInterval(shakeInterval);
     if (block.mesh && !block.broken) {
       breakFragileBlock(key);
-      if (playerGridPos.x === block.x && playerGridPos.y === block.y && playerGridPos.z === block.z) {
-        const landing = getBlocksInColumn(block.x, block.z).find(b => b.y < playerGridPos.y);
-        isFalling = true;
-        fallVelY = 0;
-        playerCube.userData.fallTargetY = landing ? landing.y : -10;
+      if (S.playerGridPos.x === block.x && S.playerGridPos.y === block.y && S.playerGridPos.z === block.z) {
+        const landing = getBlocksInColumn(block.x, block.z).find(b => b.y < S.playerGridPos.y);
+        S.isFalling = true;
+        S.fallVelY = 0;
+        S.playerCube.userData.fallTargetY = landing ? landing.y : -10;
       }
     }
   }, 600);
@@ -1113,91 +755,91 @@ function triggerShakerCrumble(block, key) {
    ROLLING PHYSICS
    ═══════════════════════════════════════════════════════════ */
 function isLastMoveKeyHeld() {
-  if (lastMoveDir.x === 1) return keysPressed['ArrowRight'] || keysPressed['KeyD'];
-  if (lastMoveDir.x === -1) return keysPressed['ArrowLeft'] || keysPressed['KeyA'];
-  if (lastMoveDir.z === 1) return keysPressed['ArrowDown'] || keysPressed['KeyS'];
-  if (lastMoveDir.z === -1) return keysPressed['ArrowUp'] || keysPressed['KeyW'];
+  if (S.lastMoveDir.x === 1) return S.keysPressed['ArrowRight'] || S.keysPressed['KeyD'];
+  if (S.lastMoveDir.x === -1) return S.keysPressed['ArrowLeft'] || S.keysPressed['KeyA'];
+  if (S.lastMoveDir.z === 1) return S.keysPressed['ArrowDown'] || S.keysPressed['KeyS'];
+  if (S.lastMoveDir.z === -1) return S.keysPressed['ArrowUp'] || S.keysPressed['KeyW'];
   return false;
 }
 
 function startRoll(dirX, dirZ) {
-  if (isRolling || isTeleporting || isLevelComplete || isFalling || isBalancing) return;
+  if (S.isRolling || S.isTeleporting || S.isLevelComplete || S.isFalling || S.isBalancing) return;
   if (!audio.ready) audio.init();
 
-  const toGX = playerGridPos.x + dirX;
-  const toGZ = playerGridPos.z + dirZ;
+  const toGX = S.playerGridPos.x + dirX;
+  const toGZ = S.playerGridPos.z + dirZ;
   const colBlocks = getBlocksInColumn(toGX, toGZ);
 
   // Crate occupying the cell the player would roll into (resting one above
   // the player's support level, like the player itself does)
-  const crate = colBlocks.find(b => b.y === playerGridPos.y + 1 && b.type === 'pushable' && !b.broken);
+  const crate = colBlocks.find(b => b.y === S.playerGridPos.y + 1 && b.type === 'pushable' && !b.broken);
   if (crate) {
     const pushToX = toGX + dirX;
     const pushToZ = toGZ + dirZ;
     const pushCol = getBlocksInColumn(pushToX, pushToZ);
     const pushObstructed = pushCol.some(b => b.y >= crate.y);
-    const floorUnderCrate = colBlocks.find(b => b.y === playerGridPos.y);
+    const floorUnderCrate = colBlocks.find(b => b.y === S.playerGridPos.y);
     if (!pushObstructed && floorUnderCrate) {
       executePush(crate, pushToX, crate.y, pushToZ, dirX, dirZ);
-      executeRoll(toGX, playerGridPos.y, toGZ, dirX, dirZ, 'roll');
-      playerCube.userData.rollPushedCrate = true; // can't reverse: the crate already moved
+      executeRoll(toGX, S.playerGridPos.y, toGZ, dirX, dirZ, 'roll');
+      S.playerCube.userData.rollPushedCrate = true; // can't reverse: the crate already moved
       return;
     }
     // Blocked push: the crate acts like a wall/step (handled below)
   }
 
   // Ceilings directly above player
-  const ceilingCurrent = getBlocksInColumn(playerGridPos.x, playerGridPos.z).find(b => b.y === playerGridPos.y + 1);
+  const ceilingCurrent = getBlocksInColumn(S.playerGridPos.x, S.playerGridPos.z).find(b => b.y === S.playerGridPos.y + 1);
 
   // Find blocks at same height, up one, down one
-  const sameLevel = colBlocks.find(b => b.y === playerGridPos.y);
-  const stepUp = colBlocks.find(b => b.y === playerGridPos.y + 1);
-  const stepDown = colBlocks.find(b => b.y === playerGridPos.y - 1);
+  const sameLevel = colBlocks.find(b => b.y === S.playerGridPos.y);
+  const stepUp = colBlocks.find(b => b.y === S.playerGridPos.y + 1);
+  const stepDown = colBlocks.find(b => b.y === S.playerGridPos.y - 1);
 
-  let targetY = playerGridPos.y;
+  let targetY = S.playerGridPos.y;
   let action = 'roll'; // roll, climb, descend, fall, void, blocked
 
-  if (isMini && stepUp && stepUp.type !== 'bridge') {
+  if (S.isMini && stepUp && stepUp.type !== 'bridge') {
     // Mini-cube vertical wall climb: only when a normal climb is impossible
     // (the wall continues at least two cells high) — climbs the face one
     // cell per move while staying in place.
-    const aboveTwo = colBlocks.find(b => b.y === playerGridPos.y + 2);
+    const aboveTwo = colBlocks.find(b => b.y === S.playerGridPos.y + 2);
     if (aboveTwo && !ceilingCurrent) {
       action = 'wall-climb';
-      targetY = playerGridPos.y + 1;
+      targetY = S.playerGridPos.y + 1;
     }
   }
 
   if (action !== 'wall-climb') {
-    if (isMini && sameLevel && stepUp && stepUp.type === 'bridge') {
+    if (S.isMini && sameLevel && stepUp && stepUp.type === 'bridge') {
       // Mini cube squeezes under bridges instead of climbing onto them
-      targetY = playerGridPos.y; action = 'roll';
+      targetY = S.playerGridPos.y; action = 'roll';
     } else if (stepUp) {
-      const stepUpCeiling = colBlocks.find(b => b.y === playerGridPos.y + 2);
+      const stepUpCeiling = colBlocks.find(b => b.y === S.playerGridPos.y + 2);
       if (!stepUpCeiling && !ceilingCurrent) {
-        targetY = playerGridPos.y + 1; action = 'climb';
+        targetY = S.playerGridPos.y + 1; action = 'climb';
       } else {
         action = 'blocked';
       }
     } else if (sameLevel) {
-      const ceilingTarget = colBlocks.find(b => b.y === playerGridPos.y + 1);
+      const ceilingTarget = colBlocks.find(b => b.y === S.playerGridPos.y + 1);
       if (!ceilingTarget) {
-        targetY = playerGridPos.y; action = 'roll';
-      } else if (isMini && ceilingTarget.type === 'bridge') {
-        targetY = playerGridPos.y; action = 'roll'; // Squeeze under bridge
+        targetY = S.playerGridPos.y; action = 'roll';
+      } else if (S.isMini && ceilingTarget.type === 'bridge') {
+        targetY = S.playerGridPos.y; action = 'roll'; // Squeeze under bridge
       } else {
         action = 'blocked';
       }
     } else if (stepDown) {
-      const stepDownCeiling = colBlocks.find(b => b.y === playerGridPos.y);
+      const stepDownCeiling = colBlocks.find(b => b.y === S.playerGridPos.y);
       if (!stepDownCeiling) {
-        targetY = playerGridPos.y - 1; action = 'descend';
+        targetY = S.playerGridPos.y - 1; action = 'descend';
       } else {
         action = 'blocked';
       }
     } else {
       // Empty target column
-      const landing = colBlocks.find(b => b.y < playerGridPos.y);
+      const landing = colBlocks.find(b => b.y < S.playerGridPos.y);
       if (landing) {
         targetY = landing.y; action = 'fall';
       } else {
@@ -1212,24 +854,24 @@ function startRoll(dirX, dirZ) {
 }
 
 function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
-  isRolling = true;
-  rollStartGridPos = { ...playerGridPos };
+  S.isRolling = true;
+  S.rollStartGridPos = { ...S.playerGridPos };
   // Snapshot bookkeeping so a mid-step reversal can cleanly undo this step.
-  rollPreState = { moveCount, comboCount, comboTimer, lastMoveDir: { ...lastMoveDir } };
-  playerCube.userData.rollPushedCrate = false;
-  animStartTime = performance.now()/1000;
-  animStartPos.copy(playerCube.position);
+  S.rollPreState = { moveCount: S.moveCount, comboCount: S.comboCount, comboTimer: S.comboTimer, lastMoveDir: { ...S.lastMoveDir } };
+  S.playerCube.userData.rollPushedCrate = false;
+  S.animStartTime = performance.now()/1000;
+  S.animStartPos.copy(S.playerCube.position);
 
   const isWall = action === 'wall-climb';
-  const visualTargetY = isWall ? playerGridPos.y + 1 : (action === 'fall' || action === 'void' ? playerGridPos.y : targetY);
+  const visualTargetY = isWall ? S.playerGridPos.y + 1 : (action === 'fall' || action === 'void' ? S.playerGridPos.y : targetY);
 
-  animEndPos.copy(getPlayerWorldPos(isWall ? playerGridPos.x : toGX, visualTargetY, isWall ? playerGridPos.z : toGZ, isMini));
-  animStartQuat.copy(playerCube.quaternion);
+  S.animEndPos.copy(getPlayerWorldPos(isWall ? S.playerGridPos.x : toGX, visualTargetY, isWall ? S.playerGridPos.z : toGZ, S.isMini));
+  S.animStartQuat.copy(S.playerCube.quaternion);
 
   const axis = new THREE.Vector3(dirZ, 0, -dirX).normalize();
-  animAxis.copy(axis);
-  animDeltaQuat.setFromAxisAngle(axis, Math.PI/2);
-  animFromEdge = false;
+  S.animAxis.copy(axis);
+  S.animDeltaQuat.setFromAxisAngle(axis, Math.PI/2);
+  S.animFromEdge = false;
 
   // Platform-relative roll: when the player rides a mover (and isn't leaving it
   // downward), anchor the roll to the platform's frame. The player sits at a
@@ -1237,63 +879,63 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
   // integer cell would bend the path diagonally. Instead the target is exactly
   // one cell from the start, and the platform's own motion is added during the
   // animation — so a forward press always rolls straight relative to the deck.
-  rollCarrier = (ridingPlatform && !isWall && action !== 'fall' && action !== 'void') ? ridingPlatform : null;
-  if (rollCarrier) {
-    rollCarrierStart.copy(rollCarrier.position);
-    animEndPos.x = animStartPos.x + dirX;
-    animEndPos.z = animStartPos.z + dirZ;
+  S.rollCarrier = (S.ridingPlatform && !isWall && action !== 'fall' && action !== 'void') ? S.ridingPlatform : null;
+  if (S.rollCarrier) {
+    S.rollCarrierStart.copy(S.rollCarrier.position);
+    S.animEndPos.x = S.animStartPos.x + dirX;
+    S.animEndPos.z = S.animStartPos.z + dirZ;
   }
 
-  const prevKey = `${playerGridPos.x},${playerGridPos.y},${playerGridPos.z}`;
-  playerGridPos.x = isWall ? playerGridPos.x : toGX;
-  playerGridPos.y = visualTargetY;
-  playerGridPos.z = isWall ? playerGridPos.z : toGZ;
+  const prevKey = `${S.playerGridPos.x},${S.playerGridPos.y},${S.playerGridPos.z}`;
+  S.playerGridPos.x = isWall ? S.playerGridPos.x : toGX;
+  S.playerGridPos.y = visualTargetY;
+  S.playerGridPos.z = isWall ? S.playerGridPos.z : toGZ;
 
-  moveCount++; updateMoveUI();
+  S.moveCount++; updateMoveUI();
 
   // Combo (visual scoring only — the extra arpeggio cue was removed)
-  const sameDir = (dirX === lastMoveDir.x && dirZ === lastMoveDir.z);
-  if (sameDir && comboTimer > 0) {
-    comboCount++;
+  const sameDir = (dirX === S.lastMoveDir.x && dirZ === S.lastMoveDir.z);
+  if (sameDir && S.comboTimer > 0) {
+    S.comboCount++;
   } else {
-    comboCount = 1;
+    S.comboCount = 1;
   }
-  comboTimer = COMBO_TIMEOUT;
-  lastMoveDir = { x:dirX, z:dirZ };
+  S.comboTimer = COMBO_TIMEOUT;
+  S.lastMoveDir = { x:dirX, z:dirZ };
   updateComboUI();
 
   // Movement sound on every step.
-  const currKey = `${playerGridPos.x},${playerGridPos.y},${playerGridPos.z}`;
-  const block = activeBlocks.get(currKey);
+  const currKey = `${S.playerGridPos.x},${S.playerGridPos.y},${S.playerGridPos.z}`;
+  const block = S.activeBlocks.get(currKey);
   if (block && block.type === 'ice') audio.playIce(); else audio.playRoll();
 
   // Break fragile block
-  const prevBlock = activeBlocks.get(prevKey);
+  const prevBlock = S.activeBlocks.get(prevKey);
   if (prevBlock && prevBlock.type === 'fragile') {
     breakFragileBlock(prevKey);
   }
 
   // Next steps on complete
-  playerCube.userData.rollAction = action;
-  playerCube.userData.targetLandingY = targetY;
+  S.playerCube.userData.rollAction = action;
+  S.playerCube.userData.targetLandingY = targetY;
 }
 
 function onRollComplete() {
-  const action = playerCube.userData.rollAction;
-  const targetY = playerCube.userData.targetLandingY;
+  const action = S.playerCube.userData.rollAction;
+  const targetY = S.playerCube.userData.targetLandingY;
 
-  const key = `${playerGridPos.x},${playerGridPos.y},${playerGridPos.z}`;
+  const key = `${S.playerGridPos.x},${S.playerGridPos.y},${S.playerGridPos.z}`;
 
   if (action === 'roll-back') {
-    playerCube.quaternion.identity();
-    isRolling = false;
+    S.playerCube.quaternion.identity();
+    S.isRolling = false;
     return;
   }
 
   if (action === 'reverse') {
     // Back on the origin cell with the pre-step orientation already restored by
     // the animation's end-snap — nothing further to resolve.
-    isRolling = false;
+    S.isRolling = false;
     return;
   }
 
@@ -1303,9 +945,9 @@ function onRollComplete() {
       enterBalancing();
       return;
     }
-    isFalling = true;
-    fallVelY = 0;
-    playerCube.userData.fallTargetY = targetY;
+    S.isFalling = true;
+    S.fallVelY = 0;
+    S.playerCube.userData.fallTargetY = targetY;
     if (action === 'fall') {
       audio.playLeap();
     } else {
@@ -1314,25 +956,25 @@ function onRollComplete() {
     return;
   }
 
-  if (boosterMovesActive > 0) {
-    boosterMovesActive--;
-    if (boosterMovesActive === 0) {
+  if (S.boosterMovesActive > 0) {
+    S.boosterMovesActive--;
+    if (S.boosterMovesActive === 0) {
       showMessage('SPEED BOOST EXPIRED', 1.0);
     }
   }
 
   // Switched/Collected checks
-  checkPrismCollection(playerGridPos.x, playerGridPos.y, playerGridPos.z);
+  checkPrismCollection(S.playerGridPos.x, S.playerGridPos.y, S.playerGridPos.z);
 
-  const block = activeBlocks.get(key);
+  const block = S.activeBlocks.get(key);
   if (block) {
     if (block.type === 'switch') triggerSwitch(key);
     if (block.type === 'teleporter') triggerTeleport(key);
     
-    if (block.type === 'container' && isCarryingPlutonium > 0) {
-      const depositedCount = isCarryingPlutonium;
-      depositedPlutonium += depositedCount;
-      isCarryingPlutonium = 0;
+    if (block.type === 'container' && S.isCarryingPlutonium > 0) {
+      const depositedCount = S.isCarryingPlutonium;
+      S.depositedPlutonium += depositedCount;
+      S.isCarryingPlutonium = 0;
       const phud = document.getElementById('plutonium-hud-bar');
       if (phud) phud.style.display = 'none';
       audio.playCollect();
@@ -1344,14 +986,14 @@ function onRollComplete() {
 
       // New level win condition: immediately win if all plutonium elements are deposited
       let totalPlutonium = 0;
-      activePrisms.forEach(p => {
+      S.activePrisms.forEach(p => {
         if (p.type === 'plutonium') totalPlutonium++;
       });
       let totalContainers = 0;
-      activeBlocks.forEach(b => {
+      S.activeBlocks.forEach(b => {
         if (b.type === 'container') totalContainers++;
       });
-      if (totalPlutonium > 0 && totalContainers > 0 && depositedPlutonium >= totalPlutonium) {
+      if (totalPlutonium > 0 && totalContainers > 0 && S.depositedPlutonium >= totalPlutonium) {
         completeLevel();
       }
     }
@@ -1365,7 +1007,7 @@ function onRollComplete() {
     
     // Booster speed activation
     if (block.type === 'booster') {
-      boosterMovesActive = 4;
+      S.boosterMovesActive = 4;
       showMessage('SPEED BOOST ACTIVE (4 MOVES)!', 1.5);
       audio.playBooster();
     }
@@ -1376,15 +1018,15 @@ function onRollComplete() {
     }
   }
 
-  if (playerGridPos.x === exitPos.x && playerGridPos.y === exitPos.y && playerGridPos.z === exitPos.z) {
+  if (S.playerGridPos.x === S.exitPos.x && S.playerGridPos.y === S.exitPos.y && S.playerGridPos.z === S.exitPos.z) {
     checkLevelComplete();
   }
 
   // Ice sliding
-  if (block && block.type === 'ice' && !isLevelComplete) {
+  if (block && block.type === 'ice' && !S.isLevelComplete) {
     setTimeout(() => {
-      if (!isRolling && !isFalling && !isLevelComplete) {
-        startRoll(lastMoveDir.x, lastMoveDir.z);
+      if (!S.isRolling && !S.isFalling && !S.isLevelComplete) {
+        startRoll(S.lastMoveDir.x, S.lastMoveDir.z);
       }
     }, 60);
   }
@@ -1394,7 +1036,7 @@ function onRollComplete() {
    SPECIAL BLOCKS LOGIC
    ═══════════════════════════════════════════════════════════ */
 function breakFragileBlock(key) {
-  const block = activeBlocks.get(key);
+  const block = S.activeBlocks.get(key);
   if (!block || block.broken) return;
   block.broken = true;
   audio.playBreak();
@@ -1445,21 +1087,21 @@ function disposeMaterial(mat) {
 }
 
 function triggerSwitch(key) {
-  const targets = switchMap.get(key);
+  const targets = S.switchMap.get(key);
   if (!targets) return;
 
-  const activeState = !(switchStates.get(key) || false);
-  switchStates.set(key, activeState);
+  const activeState = !(S.switchStates.get(key) || false);
+  S.switchStates.set(key, activeState);
   audio.playSwitch();
   addShake(0.12);
 
-  const sw = activeBlocks.get(key);
+  const sw = S.activeBlocks.get(key);
   if (sw && sw.pillar) {
     sw.pillar.material.emissive.set(activeState ? '#00ff88' : '#4466cc');
   }
 
   targets.forEach(tk => {
-    const block = activeBlocks.get(tk);
+    const block = S.activeBlocks.get(tk);
     if (!block) return;
     if (block.type === 'bridge') {
       block.active = activeState;
@@ -1495,32 +1137,32 @@ function triggerSwitch(key) {
 }
 
 function triggerTeleport(key) {
-  const destKey = teleporterMap.get(key);
+  const destKey = S.teleporterMap.get(key);
   if (!destKey) return;
-  const destBlock = activeBlocks.get(destKey);
+  const destBlock = S.activeBlocks.get(destKey);
   if (!destBlock || !destBlock.active) return;
 
   const [dx, dy, dz] = destKey.split(',').map(Number);
-  isTeleporting = true;
+  S.isTeleporting = true;
   audio.playTeleport();
-  spawnTeleportParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
+  spawnTeleportParticles(S.playerGridPos.x, S.playerGridPos.y, S.playerGridPos.z);
 
   const fadeOut = () => {
-    playerCube.scale.multiplyScalar(0.7);
-    if (playerCube.scale.x > 0.05) requestAnimationFrame(fadeOut);
+    S.playerCube.scale.multiplyScalar(0.7);
+    if (S.playerCube.scale.x > 0.05) requestAnimationFrame(fadeOut);
     else {
-      playerGridPos.x = dx; playerGridPos.y = dy; playerGridPos.z = dz;
-      playerCube.position.copy(getPlayerWorldPos(dx, dy, dz, isMini));
-      playerCube.quaternion.identity();
+      S.playerGridPos.x = dx; S.playerGridPos.y = dy; S.playerGridPos.z = dz;
+      S.playerCube.position.copy(getPlayerWorldPos(dx, dy, dz, S.isMini));
+      S.playerCube.quaternion.identity();
       spawnTeleportParticles(dx, dy, dz);
 
       const fadeIn = () => {
-        playerCube.scale.lerp(new THREE.Vector3(1,1,1), 0.3);
-        if (playerCube.scale.x < 0.95) requestAnimationFrame(fadeIn);
+        S.playerCube.scale.lerp(new THREE.Vector3(1,1,1), 0.3);
+        if (S.playerCube.scale.x < 0.95) requestAnimationFrame(fadeIn);
         else {
-          playerCube.scale.set(1,1,1); isTeleporting = false;
+          S.playerCube.scale.set(1,1,1); S.isTeleporting = false;
           checkPrismCollection(dx, dy, dz);
-          if (dx === exitPos.x && dy === exitPos.y && dz === exitPos.z) checkLevelComplete();
+          if (dx === S.exitPos.x && dy === S.exitPos.y && dz === S.exitPos.z) checkLevelComplete();
         }
       };
       fadeIn();
@@ -1534,7 +1176,7 @@ function triggerTeleport(key) {
    ═══════════════════════════════════════════════════════════ */
 function checkPrismCollection(gx, gy, gz) {
   const key = `${gx},${gy},${gz}`;
-  const prism = activePrisms.get(key);
+  const prism = S.activePrisms.get(key);
   if (prism && !prism.collected) {
     prism.collected = true;
     audio.playCollect();
@@ -1546,10 +1188,10 @@ function checkPrismCollection(gx, gy, gz) {
         prism.mesh.material = matPlutoniumGlow.clone();
         setTimeout(() => prismsGroup.remove(mesh), 200);
       }
-      isCarryingPlutonium++;
-      plutoniumTimer = activeLevel.plutoniumTimeLimit ?? 30.0;
-      if (!hasCollectedPlutoniumThisRun) {
-        hasCollectedPlutoniumThisRun = true;
+      S.isCarryingPlutonium++;
+      S.plutoniumTimer = S.activeLevel.plutoniumTimeLimit ?? 30.0;
+      if (!S.hasCollectedPlutoniumThisRun) {
+        S.hasCollectedPlutoniumThisRun = true;
         showMessage('deposit in container', 0.5);
       } else {
         showMessage('PLUTONIUM COLLECTED! DEPOSIT IN CONTAINER', 3.0);
@@ -1574,41 +1216,41 @@ function checkPrismCollection(gx, gy, gz) {
 }
 
 function activateMiniCube() {
-  if (isMini) {
-    miniTimer = 15; audio.playShrink(); return;
+  if (S.isMini) {
+    S.miniTimer = 15; audio.playShrink(); return;
   }
-  isMini = true; miniTimer = 15;
+  S.isMini = true; S.miniTimer = 15;
   audio.playShrink();
   showMessage('MINI CUBE! SPEED + CLIMBING', 2);
   document.getElementById('mini-hud-bar').style.display = 'block';
 
   const shrink = () => {
-    if (!isMini) return;
-    playerCube.scale.lerp(new THREE.Vector3(0.5,0.5,0.5), 0.25);
-    if (playerCube.scale.x > 0.51) requestAnimationFrame(shrink);
-    else playerCube.scale.set(0.5,0.5,0.5);
+    if (!S.isMini) return;
+    S.playerCube.scale.lerp(new THREE.Vector3(0.5,0.5,0.5), 0.25);
+    if (S.playerCube.scale.x > 0.51) requestAnimationFrame(shrink);
+    else S.playerCube.scale.set(0.5,0.5,0.5);
   };
   shrink();
 }
 
 function checkGrowBack() {
   // Check ceiling above
-  const ceiling = getBlocksInColumn(playerGridPos.x, playerGridPos.z).find(b => b.y === playerGridPos.y + 1);
+  const ceiling = getBlocksInColumn(S.playerGridPos.x, S.playerGridPos.z).find(b => b.y === S.playerGridPos.y + 1);
   if (ceiling) {
-    miniTimer = 0.5; // check again in 0.5s
+    S.miniTimer = 0.5; // check again in 0.5s
     showMessage('TIGHT SPACE - CANNOT GROW!', 1);
     return;
   }
-  isMini = false;
+  S.isMini = false;
   audio.playGrow();
   showMessage('RESTORED SIZE', 1.5);
   document.getElementById('mini-hud-bar').style.display = 'none';
 
   const grow = () => {
-    if (isMini) return;
-    playerCube.scale.lerp(new THREE.Vector3(1,1,1), 0.25);
-    if (playerCube.scale.x < 0.99) requestAnimationFrame(grow);
-    else playerCube.scale.set(1,1,1);
+    if (S.isMini) return;
+    S.playerCube.scale.lerp(new THREE.Vector3(1,1,1), 0.25);
+    if (S.playerCube.scale.x < 0.99) requestAnimationFrame(grow);
+    else S.playerCube.scale.set(1,1,1);
   };
   grow();
 }
@@ -1619,17 +1261,17 @@ function checkGrowBack() {
 function checkLevelComplete() {
   let remaining = 0;
   let totalPlutonium = 0;
-  activePrisms.forEach(p => {
+  S.activePrisms.forEach(p => {
     if (p.type === 'plutonium') totalPlutonium++;
     else if (p.type !== 'miniprism' && !p.collected) remaining++;
   });
   if (remaining === 0) {
     let totalContainers = 0;
-    activeBlocks.forEach(b => {
+    S.activeBlocks.forEach(b => {
       if (b.type === 'container') totalContainers++;
     });
-    if (totalPlutonium > 0 && totalContainers > 0 && depositedPlutonium < totalPlutonium) {
-      showMessage(`DEPOSIT ALL PLUTONIUM FIRST! (${depositedPlutonium}/${totalPlutonium})`, 2.0);
+    if (totalPlutonium > 0 && totalContainers > 0 && S.depositedPlutonium < totalPlutonium) {
+      showMessage(`DEPOSIT ALL PLUTONIUM FIRST! (${S.depositedPlutonium}/${totalPlutonium})`, 2.0);
       return;
     }
     completeLevel();
@@ -1637,28 +1279,28 @@ function checkLevelComplete() {
 }
 
 function advanceCompletedLevel() {
-  if (completeTimeoutId) {
-    clearTimeout(completeTimeoutId);
-    completeTimeoutId = null;
+  if (S.completeTimeoutId) {
+    clearTimeout(S.completeTimeoutId);
+    S.completeTimeoutId = null;
   }
   document.getElementById('complete-overlay').classList.remove('show');
-  if (isEditMode) {
+  if (S.isEditMode) {
     exitPlaytestMode();
   } else {
-    currentLevelIdx = (currentLevelIdx + 1) % premadeLevels.length;
-    loadPreMadeLevel(currentLevelIdx);
+    S.currentLevelIdx = (S.currentLevelIdx + 1) % S.premadeLevels.length;
+    loadPreMadeLevel(S.currentLevelIdx);
   }
 }
 
 function completeLevel() {
-  isLevelComplete = true;
+  S.isLevelComplete = true;
   audio.playComplete();
   spawnLevelCompleteExplosion();
-  completeAnimStartTime = performance.now() / 1000;
+  S.completeAnimStartTime = performance.now() / 1000;
 
-  const stars = moveCount <= activeLevel.par ? 3 : (moveCount <= activeLevel.par * 1.5 ? 2 : 1);
+  const stars = S.moveCount <= S.activeLevel.par ? 3 : (S.moveCount <= S.activeLevel.par * 1.5 ? 2 : 1);
   document.getElementById('complete-overlay').classList.add('show');
-  document.getElementById('complete-text').textContent = isEditMode ? 'PLAYTEST COMPLETE' : `LEVEL ${currentLevelIdx+1} CLEAR`;
+  document.getElementById('complete-text').textContent = S.isEditMode ? 'PLAYTEST COMPLETE' : `LEVEL ${S.currentLevelIdx+1} CLEAR`;
   
   // Clean stars before sequence starts
   document.getElementById('star1').classList.remove('earned');
@@ -1684,8 +1326,8 @@ function completeLevel() {
     }, 1350);
   }
 
-  if (completeTimeoutId) clearTimeout(completeTimeoutId);
-  completeTimeoutId = setTimeout(() => {
+  if (S.completeTimeoutId) clearTimeout(S.completeTimeoutId);
+  S.completeTimeoutId = setTimeout(() => {
     advanceCompletedLevel();
   }, 2500);
 }
@@ -1697,833 +1339,128 @@ function respawnPlayer() {
 
   // Full level reset from the pristine snapshot — restores broken fragile/
   // shaker blocks, pushed crates, switch states and prisms (no softlocks).
-  if (levelSnapshot) {
-    activeLevel = deserializeLevel(levelSnapshot);
-    buildLevel3D(activeLevel);
+  if (S.levelSnapshot) {
+    S.activeLevel = deserializeLevel(S.levelSnapshot);
+    buildLevel3D(S.activeLevel);
   }
   showMessage('LEVEL RESTART', 1.2);
 }
 
-function generateAILabyrinth() {
-  const width = 41;
-  const depth = 41;
-  const targetBlocksCount = 800;
-  
-  const lvl = new Level3D();
-  lvl.name = "Goose Labyrinth";
-  lvl.world = Math.floor(Math.random() * 5);
-  
-  const maze = [];
-  for (let x = 0; x < width; x++) {
-    maze[x] = [];
-    for (let z = 0; z < depth; z++) {
-      maze[x][z] = { visited: false, active: false };
-    }
-  }
-  
-  const stack = [];
-  const startX = 1, startZ = 1;
-  maze[startX][startZ].visited = true;
-  maze[startX][startZ].active = true;
-  stack.push({ x: startX, z: startZ });
-  
-  const cells = [{ x: startX, z: startZ }];
-  const allPathBlocks = new Set();
-  allPathBlocks.add(`${startX},${startZ}`);
-  
-  while (stack.length > 0) {
-    const current = stack[stack.length - 1];
-    const neighbors = [];
-    
-    const dirs = [
-      { dx: 2, dz: 0 },
-      { dx: -2, dz: 0 },
-      { dx: 0, dz: 2 },
-      { dx: 0, dz: -2 }
-    ];
-    
-    dirs.forEach(d => {
-      const nx = current.x + d.dx;
-      const nz = current.z + d.dz;
-      if (nx > 0 && nx < width - 1 && nz > 0 && nz < depth - 1) {
-        if (!maze[nx][nz].visited) {
-          neighbors.push({ x: nx, z: nz });
-        }
-      }
-    });
-    
-    if (neighbors.length > 0) {
-      const next = neighbors[Math.floor(Math.random() * neighbors.length)];
-      
-      maze[next.x][next.z].visited = true;
-      maze[next.x][next.z].active = true;
-      cells.push({ x: next.x, z: next.z });
-      allPathBlocks.add(`${next.x},${next.z}`);
-      
-      const cx = (current.x + next.x) / 2;
-      const cz = (current.z + next.z) / 2;
-      maze[cx][cz].visited = true;
-      maze[cx][cz].active = true;
-      cells.push({ x: cx, z: cz });
-      allPathBlocks.add(`${cx},${cz}`);
-      
-      stack.push(next);
-    } else {
-      stack.pop();
-    }
-  }
-  
-  // Ensure exactly 800 blocks
-  let currentBlocks = Array.from(allPathBlocks).map(s => {
-    const [x, z] = s.split(',').map(Number);
-    return { x, z };
-  });
-  
-  while (currentBlocks.length < targetBlocksCount) {
-    const base = currentBlocks[Math.floor(Math.random() * currentBlocks.length)];
-    const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
-    const d = dirs[Math.floor(Math.random() * dirs.length)];
-    const nx = base.x + d.dx;
-    const nz = base.z + d.dz;
-    if (nx > 0 && nx < width - 1 && nz > 0 && nz < depth - 1) {
-      const key = `${nx},${nz}`;
-      if (!allPathBlocks.has(key)) {
-        allPathBlocks.add(key);
-        maze[nx][nz].active = true;
-        currentBlocks.push({ x: nx, z: nz });
-      }
-    }
-  }
-  
-  let exitCell = cells[0];
-  let maxDist = 0;
-  cells.forEach(c => {
-    const dist = Math.abs(c.x - startX) + Math.abs(c.z - startZ);
-    if (dist > maxDist) {
-      maxDist = dist;
-      exitCell = c;
-    }
-  });
-  
-  lvl.start = { x: startX, y: 0, z: startZ };
-  lvl.exit = { x: exitCell.x, y: 0, z: exitCell.z };
-  lvl.par = Math.round(currentBlocks.length * 0.5);
-  
-  currentBlocks.forEach(b => {
-    const key = `${b.x},0,${b.z}`;
-    const isStart = (b.x === startX && b.z === startZ);
-    const isExit = (b.x === exitCell.x && b.z === exitCell.z);
-    
-    let type = 'normal';
-    if (!isStart && !isExit && Math.random() < 0.22) {
-      type = 'shaker';
-    }
-    
-    lvl.blocks.set(key, { x: b.x, y: 0, z: b.z, type, properties: {} });
-  });
-  
-  const deadEnds = [];
-  for (let x = 1; x < width - 1; x += 2) {
-    for (let z = 1; z < depth - 1; z += 2) {
-      if (maze[x][z].active) {
-        let conns = 0;
-        const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
-        dirs.forEach(d => {
-          if (x + d.dx > 0 && x + d.dx < width && z + d.dz > 0 && z + d.dz < depth) {
-            if (maze[x + d.dx][z + d.dz].active) conns++;
-          }
-        });
-        if (conns === 1) {
-          const isStart = (x === startX && z === startZ);
-          const isExit = (x === exitCell.x && z === exitCell.z);
-          if (!isStart && !isExit) {
-            deadEnds.push({ x, z });
-          }
-        }
-      }
-    }
-  }
-  
-  let prismsToPlace = Math.min(deadEnds.length, 8);
-  if (prismsToPlace < 3) {
-    prismsToPlace = 6;
-    const shuffled = currentBlocks.filter(b => !(b.x === startX && b.z === startZ) && !(b.x === exitCell.x && b.z === exitCell.z)).sort(() => 0.5 - Math.random());
-    for (let i = 0; i < prismsToPlace; i++) {
-      if (shuffled[i]) {
-        lvl.prisms.set(`${shuffled[i].x},0,${shuffled[i].z}`, { type: 'prism' });
-      }
-    }
-  } else {
-    const shuffled = deadEnds.sort(() => 0.5 - Math.random());
-    for (let i = 0; i < prismsToPlace; i++) {
-      lvl.prisms.set(`${shuffled[i].x},0,${shuffled[i].z}`, { type: 'prism' });
-    }
-  }
-  
-  return lvl;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   AI LEVEL GENERATOR 2 — "ARCHITECT" (difficulty-driven)
-   Builds a guaranteed-solvable level scaled to a 1..10 difficulty, using all
-   gameplay elements. See docs/ai-generator-2-concept.md for the design.
-   ═══════════════════════════════════════════════════════════ */
-
-// Difficulty 1..10 → all the knobs that scale together.
-function architectParams(d) {
-  const t = (Math.max(1, Math.min(10, d)) - 1) / 9; // 0..1
-  const li = (a, b) => Math.round(a + (b - a) * t);
-  const lf = (a, b) => a + (b - a) * t;
-  return {
-    halfSize: li(5, 17),          // grid extends ±halfSize → up to ~34 wide
-    backboneLength: li(14, 150),
-    maxFloors: li(0, 5),
-    floorChance: lf(0.05, 0.40),
-    branches: li(1, 16),
-    branchLen: li(2, 6),
-    switchGates: li(0, 3),
-    teleporters: li(0, 3),
-    movers: li(0, 4),
-    enemies: li(0, 5),
-    prisms: li(3, 14),
-    miniprisms: li(0, 8),
-    fragileChance: lf(0.0, 0.30),
-    iceChance: lf(0.02, 0.22),
-    shakerChance: lf(0.0, 0.22),
-    dangerChance: lf(0.0, 0.20),
-    boosterChance: lf(0.0, 0.08),
-    parFactor: lf(1.3, 0.65),
-  };
-}
-
-// Column index "x,z" → Map(y → type), for fast reachability queries.
-function archColIndex(blocks) {
-  const idx = new Map();
-  blocks.forEach(b => {
-    const ck = `${b.x},${b.z}`;
-    if (!idx.has(ck)) idx.set(ck, new Map());
-    idx.get(ck).set(b.y, b.type);
-  });
-  return idx;
-}
-
-// One orthogonal player step (mirrors getEnemyMoveTargetY): returns the landing
-// Y when moving from (fromX,fromY,fromZ) into column (toX,toZ), else null.
-// `danger` tiles are treated as lethal walls (never standable).
-function archStepY(idx, fromX, fromY, fromZ, toX, toZ) {
-  const toCol = idx.get(`${toX},${toZ}`);
-  const fromCol = idx.get(`${fromX},${fromZ}`);
-  if (!toCol) return null;
-  const okType = y => toCol.get(y) !== 'danger';
-  if (toCol.has(fromY + 1)) { // step up
-    if (okType(fromY + 1) && !toCol.has(fromY + 2) && !(fromCol && fromCol.has(fromY + 1))) return fromY + 1;
-    return null;
-  }
-  if (toCol.has(fromY)) {     // same level
-    if (okType(fromY) && !toCol.has(fromY + 1)) return fromY;
-    return null;
-  }
-  if (toCol.has(fromY - 1)) { // step down
-    if (okType(fromY - 1) && !toCol.has(fromY)) return fromY - 1;
-    return null;
-  }
-  return null;
-}
-
-// Flood-fill of all cells reachable from `start` under player movement rules.
-function archReachable(blocks, start) {
-  const idx = archColIndex(blocks);
-  const seen = new Set([`${start.x},${start.y},${start.z}`]);
-  const q = [{ x: start.x, y: start.y, z: start.z }];
-  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
-  let guard = 0;
-  while (q.length && guard++ < 200000) {
-    const c = q.shift();
-    for (const { dx, dz } of dirs) {
-      const nx = c.x + dx, nz = c.z + dz;
-      const ny = archStepY(idx, c.x, c.y, c.z, nx, nz);
-      if (ny === null) continue;
-      const key = `${nx},${ny},${nz}`;
-      if (!seen.has(key)) { seen.add(key); q.push({ x: nx, y: ny, z: nz }); }
-    }
-  }
-  return seen;
-}
-
-function generateArchitectLevel(difficulty) {
-  const P = architectParams(difficulty);
-  const world = Math.min(4, Math.floor((difficulty - 1) / 2));
-  return buildArchitect(P, `Architect · Lvl ${difficulty}`, world);
-}
-
-// AI Pro2 — toggle-driven Architect. The 10 criteria switch whole element
-// families on/off; `size` (1..10) scales how much of each enabled family
-// appears. The shared builder still guarantees a solvable level.
-function generateArchitectLevel2(opts) {
-  const size = Math.max(1, Math.min(10, opts.size || 5));
-  const P = architectParams(size);
-  if (!opts.verticality) { P.maxFloors = 0; P.floorChance = 0; }
-  if (!opts.teleporters) { P.teleporters = 0; }
-  if (!opts.switchGates) { P.switchGates = 0; }
-  if (!opts.movers)      { P.movers = 0; }
-  if (!opts.ice)         { P.iceChance = 0; }
-  if (!opts.enemies)     { P.enemies = 0; }
-  if (!opts.collapse)    { P.fragileChance = 0; P.shakerChance = 0; }
-  if (!opts.danger)      { P.dangerChance = 0; }
-  // Hazards (collapse/danger) and bonus mini-prisms live only on optional
-  // branch cells. If the player wants those families but turned exploration
-  // branches off, keep a few short spurs to host them; otherwise honour a
-  // fully linear layout.
-  if (!opts.branching) {
-    const needHosts = opts.collapse || opts.danger;
-    P.branches = needHosts ? Math.max(2, Math.round(size / 3)) : 0;
-    P.branchLen = Math.min(P.branchLen, 3);
-    P.miniprisms = needHosts ? Math.min(P.miniprisms, 3) : 0;
-  }
-  // Crate puzzles are a new module not covered by architectParams.
-  P.crates = opts.crates ? Math.max(1, Math.round(size / 3)) : 0;
-  const world = Math.min(4, Math.floor((size - 1) / 2));
-  return buildArchitect(P, `Architect2 · Lvl ${size}`, world);
-}
-
-// AI Pro3 — quantified Architect. Each criterion carries an exact quantity, so
-// the user dials in precise amounts (e.g. "exactly 4 crate puzzles"). Unchecked
-// element families switch off; unchecked tuning knobs fall back to the size
-// preset. The shared builder still guarantees a solvable level.
-function generateArchitectLevel3(opts) {
-  const clamp = (v, lo, hi) => isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : lo;
-  const size = clamp(opts.size || 5, 1, 10);
-  const P = architectParams(size);
-
-  // ── Tuning knobs: use the supplied value, else keep the size-based default ──
-  if (opts.pathLength   != null) P.backboneLength = clamp(opts.pathLength, 20, 250);
-  if (opts.arenaSize    != null) P.halfSize       = clamp(opts.arenaSize, 5, 20);
-  if (opts.branchLen    != null) P.branchLen      = clamp(opts.branchLen, 2, 10);
-  if (opts.parTightness != null) P.parFactor      = 1.4 - (clamp(opts.parTightness, 1, 10) - 1) / 9 * 0.8; // 1.4 → 0.6
-  P.moverSpeed = (opts.moverSpeed != null)
-    ? 0.6 + (clamp(opts.moverSpeed, 1, 10) - 1) / 9 * 1.8 // 0.6 → 2.4
-    : 1.2;
-
-  // ── Verticality: floor count, or flat when off ──
-  if (opts.verticality) { P.maxFloors = clamp(opts.floors, 1, 8); P.floorChance = Math.max(P.floorChance, 0.22); }
-  else { P.maxFloors = 0; P.floorChance = 0; }
-
-  // ── Element families: exact counts, or 0 when the family is off ──
-  P.branches    = opts.branching   ? clamp(opts.branches, 1, 30)    : 0;
-  P.teleporters = opts.teleporters ? clamp(opts.teleporters, 1, 10) : 0;
-  P.switchGates = opts.switchGates ? clamp(opts.switchGates, 1, 10) : 0;
-  P.movers      = opts.movers      ? clamp(opts.movers, 1, 12)      : 0;
-  P.crates      = opts.crates      ? clamp(opts.crates, 1, 12)      : 0;
-  P.enemies     = opts.enemies     ? clamp(opts.enemies, 1, 15)     : 0;
-  P.prisms      = opts.prisms      ? clamp(opts.prisms, 1, 30)      : 0;
-  P.miniprisms  = opts.miniprisms  ? clamp(opts.miniprisms, 1, 20)  : 0;
-
-  // ── Hazards & boosters: drive the builder via EXACT counts, not chances ──
-  P.iceChance = 0; P.boosterChance = 0; P.fragileChance = 0; P.shakerChance = 0; P.dangerChance = 0;
-  P.collapseCount = opts.collapse ? clamp(opts.collapseTiles, 1, 30) : 0;
-  P.iceCount      = opts.ice      ? clamp(opts.iceTiles, 1, 30)      : 0;
-  P.dangerCount   = opts.danger   ? clamp(opts.dangerTiles, 1, 30)   : 0;
-  P.boosterCount  = opts.boosters ? clamp(opts.boosters, 1, 15)      : 0;
-
-  // ── New AI Pro3 sections ──
-  P.secretRooms  = opts.secretRooms  ? clamp(opts.secretRooms, 1, 8)  : 0;
-  P.iceCorridors = opts.iceCorridors ? clamp(opts.iceCorridors, 1, 8) : 0;
-  P.plutonium    = opts.plutonium    ? clamp(opts.plutonium, 1, 10)   : 0;
-  P.plutoniumTime = opts.plutoniumTime ? clamp(opts.plutoniumTime, 5, 180) : 30;
-
-  // Collapse/danger tiles live only on optional branch cells. If those are
-  // requested but branching is off, carve a few short host spurs for them.
-  if (!P.branches && (P.collapseCount || P.dangerCount)) {
-    P.branches = Math.max(2, Math.round((P.collapseCount + P.dangerCount) / 3));
-    P.branchLen = Math.min(P.branchLen, 4);
-  }
-
-  const world = clamp(Math.floor((size - 1) / 2), 0, 4);
-  const lvl = buildArchitect(P, `Architect3 · Lvl ${size}`, world);
-  lvl.buildBlocksLimit = opts.buildLimit !== undefined ? opts.buildLimit : 10;
-  lvl.plutoniumTimeLimit = P.plutoniumTime;
-  return lvl;
-}
-
-// Shared Architect builder: turns a fully-resolved parameter set into a
-// guaranteed-solvable level. Used by both AI Pro (difficulty preset) and
-// AI Pro2 (per-criterion toggles).
-function buildArchitect(P, name, world) {
-  const lvl = new Level3D();
-  lvl.name = name;
-  lvl.world = world;
-
-  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
-  const occ = new Map(); // "x,z" → y (one height per column keeps the path ceiling-free)
-  const setBlock = (c, type, props = {}) =>
-    lvl.blocks.set(`${c.x},${c.y},${c.z}`, { x: c.x, y: c.y, z: c.z, type, properties: props });
-  const inBounds = (x, z) => Math.abs(x) <= P.halfSize && Math.abs(z) <= P.halfSize;
-
-  // ── 1) Backbone: a winding, guaranteed-walkable network from start outward.
-  // Backtracking keeps the walk from stalling in an early dead end, so high
-  // difficulties reliably reach their target size. Every cell stays connected,
-  // at most one height per column → the whole structure is always walkable.
-  const path = [{ x: 0, y: 0, z: 0 }];
-  occ.set('0,0', 0);
-  let cx = 0, cy = 0, cz = 0, heading = dirs[0];
-  let stepsLeft = P.backboneLength;
-  const roomAt = (x, z) => dirs.some(d => inBounds(x + d.dx, z + d.dz) && !occ.has(`${x + d.dx},${z + d.dz}`));
-  while (stepsLeft > 0) {
-    const options = dirs.filter(d => inBounds(cx + d.dx, cz + d.dz) && !occ.has(`${cx + d.dx},${cz + d.dz}`));
-    if (!options.length) {
-      // Dead end — hop back to an earlier cell that still has open neighbours.
-      let jumped = false;
-      for (let bi = path.length - 1; bi >= 0; bi--) {
-        if (roomAt(path[bi].x, path[bi].z)) { cx = path[bi].x; cy = path[bi].y; cz = path[bi].z; heading = dirs[Math.floor(Math.random() * 4)]; jumped = true; break; }
-      }
-      if (!jumped) break; // grid genuinely full
-      continue;
-    }
-    const straight = options.find(d => d.dx === heading.dx && d.dz === heading.dz);
-    heading = (straight && Math.random() < 0.55) ? straight : options[Math.floor(Math.random() * options.length)];
-    const nx = cx + heading.dx, nz = cz + heading.dz;
-    let ny = cy;
-    if (P.maxFloors > 0 && Math.random() < P.floorChance) {
-      const cand = cy + (Math.random() < 0.5 ? 1 : -1);
-      if (cand >= 0 && cand <= P.maxFloors) ny = cand;
-    }
-    occ.set(`${nx},${nz}`, ny);
-    path.push({ x: nx, y: ny, z: nz });
-    cx = nx; cy = ny; cz = nz; stepsLeft--;
-  }
-  path.forEach(c => setBlock(c, 'normal'));
-  lvl.start = { ...path[0] };
-  // Exit = farthest reachable backbone cell (height weighted), for a long route.
-  let exitCell = path[0], maxD = 0;
-  path.forEach(c => { const d = Math.abs(c.x) + Math.abs(c.z) + c.y * 2; if (d > maxD) { maxD = d; exitCell = c; } });
-  lvl.exit = { ...exitCell };
-  const startKey = `${path[0].x},${path[0].y},${path[0].z}`;
-  const exitKey = `${lvl.exit.x},${lvl.exit.y},${lvl.exit.z}`;
-
-  // ── 2) Branches & rooms (off-path, for bonus content and hazards) ──
-  const branchCells = [];
-  for (let b = 0; b < P.branches; b++) {
-    const anchor = path[1 + Math.floor(Math.random() * Math.max(1, path.length - 2))];
-    let bx = anchor.x, by = anchor.y, bz = anchor.z;
-    let bdir = dirs[Math.floor(Math.random() * 4)];
-    const len = 1 + Math.floor(Math.random() * P.branchLen);
-    for (let s = 0; s < len; s++) {
-      if (Math.random() < 0.3) bdir = dirs[Math.floor(Math.random() * 4)];
-      const nx = bx + bdir.dx, nz = bz + bdir.dz;
-      if (!inBounds(nx, nz) || occ.has(`${nx},${nz}`)) break;
-      let ny = by;
-      if (P.maxFloors > 0 && Math.random() < P.floorChance * 0.6) {
-        const cand = by + (Math.random() < 0.5 ? 1 : -1);
-        if (cand >= 0 && cand <= P.maxFloors) ny = cand;
-      }
-      occ.set(`${nx},${nz}`, ny);
-      const cell = { x: nx, y: ny, z: nz };
-      setBlock(cell, 'normal');
-      branchCells.push(cell);
-      bx = nx; by = ny; bz = nz;
-    }
-  }
-
-  // ── 3) Switch-gated bridges on the backbone (switch placed before the gate) ──
-  for (let g = 0; g < P.switchGates && path.length > 9; g++) {
-    const i = 5 + Math.floor(Math.random() * (path.length - 7));
-    const k = 1 + Math.floor(Math.random() * 2);
-    const bridgeKeys = [];
-    for (let j = i; j < Math.min(i + k, path.length - 1); j++) {
-      const c = path[j], ck = `${c.x},${c.y},${c.z}`;
-      if (lvl.blocks.get(ck).type !== 'normal') continue;
-      setBlock(c, 'bridge');
-      bridgeKeys.push(ck);
-    }
-    if (!bridgeKeys.length) continue;
-    const sc = path[Math.max(1, i - 1 - Math.floor(Math.random() * 2))];
-    const sk = `${sc.x},${sc.y},${sc.z}`;
-    if (lvl.blocks.get(sk).type === 'normal') {
-      setBlock(sc, 'switch');
-      bridgeKeys.forEach(bk => lvl.links.push({ type: 'switch-trigger', from: sk, to: bk }));
-    }
-    // else: leave bridge always-on (still solvable)
-  }
-
-  // ── 4) Teleporter shortcuts between distant backbone cells ──
-  for (let t = 0; t < P.teleporters; t++) {
-    const a = path[Math.floor(Math.random() * path.length)];
-    const b = path[Math.floor(Math.random() * path.length)];
-    const ak = `${a.x},${a.y},${a.z}`, bk = `${b.x},${b.y},${b.z}`;
-    if (ak === bk || ak === startKey || bk === startKey || ak === exitKey || bk === exitKey) continue;
-    const ba = lvl.blocks.get(ak), bb = lvl.blocks.get(bk);
-    if (!ba || !bb || ba.type !== 'normal' || bb.type !== 'normal') continue;
-    ba.type = 'teleporter'; bb.type = 'teleporter';
-    lvl.links.push({ type: 'teleporter-link', k1: ak, k2: bk });
-  }
-
-  // ── 5) Moving platforms: optional bonus routes over a gap to a mini-prism ──
-  for (let m = 0; m < P.movers; m++) {
-    const anchor = path[2 + Math.floor(Math.random() * Math.max(1, path.length - 3))];
-    const d = dirs[Math.floor(Math.random() * 4)];
-    const g1 = { x: anchor.x + d.dx, y: anchor.y, z: anchor.z + d.dz };
-    const g2 = { x: anchor.x + 2 * d.dx, y: anchor.y, z: anchor.z + 2 * d.dz };
-    const plat = { x: anchor.x + 3 * d.dx, y: anchor.y, z: anchor.z + 3 * d.dz };
-    const free = c => inBounds(c.x, c.z) && !occ.has(`${c.x},${c.z}`);
-    if (!(free(g1) && free(g2) && free(plat))) continue;
-    occ.set(`${g1.x},${g1.z}`, g1.y);
-    occ.set(`${plat.x},${plat.z}`, plat.y);
-    setBlock(g1, 'moving', { targetX: g2.x, targetY: g2.y, targetZ: g2.z, speed: P.moverSpeed || 1.2 });
-    setBlock(plat, 'normal');
-    lvl.prisms.set(`${plat.x},${plat.y},${plat.z}`, { type: 'miniprism' });
-  }
-
-  // ── 5b) Crate & pressure-plate puzzles ──
-  // Push the crate one cell onto the plate to open a plate-gated bridge that
-  // leads to a bonus mini-prism. Built entirely on fresh off-path cells (flat,
-  // at the anchor's height), so the critical route is never affected and the
-  // reward is always optional — no softlock risk.
-  const perpOf = d => ({ dx: d.dz, dz: d.dx });
-  const colFree = c => inBounds(c.x, c.z) && !occ.has(`${c.x},${c.z}`);
-  let cratesPlaced = 0;
-  for (let a = 0; cratesPlaced < (P.crates || 0) && a < (P.crates || 0) * 40 + 40; a++) {
-    const anchor = path[2 + Math.floor(Math.random() * Math.max(1, path.length - 3))];
-    const anchorKey = `${anchor.x},${anchor.y},${anchor.z}`;
-    if (anchorKey === startKey || anchorKey === exitKey) continue;
-    const d = dirs[Math.floor(Math.random() * 4)];
-    const pp = perpOf(d);
-    const p = Math.random() < 0.5 ? pp : { dx: -pp.dx, dz: -pp.dz };
-    const y = anchor.y;
-    const C0 = { x: anchor.x + d.dx,     y, z: anchor.z + d.dz };     // floor + crate (sits at y+1)
-    const C1 = { x: anchor.x + 2 * d.dx, y, z: anchor.z + 2 * d.dz }; // pressure plate (push target)
-    const B0 = { x: anchor.x + p.dx,     y, z: anchor.z + p.dz };     // plate-gated bonus bridge
-    const R  = { x: anchor.x + 2 * p.dx, y, z: anchor.z + 2 * p.dz }; // reward: floor + mini-prism
-    if (![C0, C1, B0, R].every(colFree)) continue;
-    [C0, C1, B0, R].forEach(c => occ.set(`${c.x},${c.z}`, c.y));
-    setBlock(C0, 'normal');
-    setBlock({ x: C0.x, y: y + 1, z: C0.z }, 'pushable'); // the crate, resting on C0's floor
-    setBlock(C1, 'pressureplate');
-    setBlock(B0, 'bridge');
-    setBlock(R, 'normal');
-    lvl.links.push({ type: 'switch-trigger', from: `${C1.x},${C1.y},${C1.z}`, to: `${B0.x},${B0.y},${B0.z}` });
-    lvl.prisms.set(`${R.x},${R.y},${R.z}`, { type: 'miniprism' });
-    cratesPlaced++;
-  }
-
-  // ── 6) Mandatory prisms on backbone cells (always reachable) ──
-  const prismPool = path.filter(c => {
-    const k = `${c.x},${c.y},${c.z}`;
-    return k !== startKey && k !== exitKey && lvl.blocks.get(k).type === 'normal';
-  }).sort(() => 0.5 - Math.random());
-  const prismCount = Math.min(P.prisms, prismPool.length);
-  for (let i = 0; i < prismCount; i++) {
-    const c = prismPool[i];
-    lvl.prisms.set(`${c.x},${c.y},${c.z}`, { type: 'prism' });
-  }
-
-  // ── 7) Hazard styling — risk only on optional cells ──
-  // Backbone (non-critical, no prism): occasional ice / booster only.
-  path.forEach(c => {
-    const k = `${c.x},${c.y},${c.z}`;
-    if (k === startKey || k === exitKey || lvl.prisms.has(k)) return;
-    const b = lvl.blocks.get(k);
-    if (b.type !== 'normal') return;
-    if (Math.random() < P.iceChance * 0.5) b.type = 'ice';
-    else if (Math.random() < P.boosterChance) b.type = 'booster';
-  });
-  // Branch cells: fragile / shaker / danger / ice (optional routes only).
-  branchCells.forEach(c => {
-    const k = `${c.x},${c.y},${c.z}`;
-    if (lvl.prisms.has(k)) return;
-    const b = lvl.blocks.get(k);
-    if (!b || b.type !== 'normal') return;
-    const r = Math.random();
-    if (r < P.fragileChance) b.type = 'fragile';
-    else if (r < P.fragileChance + P.shakerChance) b.type = 'shaker';
-    else if (r < P.fragileChance + P.shakerChance + P.dangerChance) b.type = 'danger';
-    else if (r < P.fragileChance + P.shakerChance + P.dangerChance + P.iceChance) b.type = 'ice';
-  });
-
-  // ── 8) Bonus mini-prisms on branch ends (risky reward) ──
-  const safeBranches = branchCells.filter(c => {
-    const b = lvl.blocks.get(`${c.x},${c.y},${c.z}`);
-    return b && b.type !== 'danger';
-  }).sort(() => 0.5 - Math.random());
-  for (let i = 0; i < Math.min(P.miniprisms, safeBranches.length); i++) {
-    const c = safeBranches[i];
-    const k = `${c.x},${c.y},${c.z}`;
-    if (!lvl.prisms.has(k)) lvl.prisms.set(k, { type: 'miniprism' });
-  }
-
-  // ── 8b) Geheim-Kammern (AI Pro3): enclosed bonus pockets off the backbone ──
-  // A 1-cell entrance opening into a 2-cell nook with a mini-prism, built on
-  // fresh off-path cells at the anchor's height — always optional, never blocks
-  // the critical route (mirrors the crate/mover placement contract).
-  let roomsPlaced = 0;
-  for (let a = 0; roomsPlaced < (P.secretRooms || 0) && a < (P.secretRooms || 0) * 40 + 40; a++) {
-    const anchor = path[2 + Math.floor(Math.random() * Math.max(1, path.length - 3))];
-    const anchorKey = `${anchor.x},${anchor.y},${anchor.z}`;
-    if (anchorKey === startKey || anchorKey === exitKey) continue;
-    const d = dirs[Math.floor(Math.random() * 4)];
-    const pp = perpOf(d);
-    const p = Math.random() < 0.5 ? pp : { dx: -pp.dx, dz: -pp.dz };
-    const y = anchor.y;
-    const E  = { x: anchor.x + d.dx,            y, z: anchor.z + d.dz };            // entrance
-    const R1 = { x: anchor.x + 2 * d.dx,        y, z: anchor.z + 2 * d.dz };        // reward cell
-    const R2 = { x: anchor.x + 2 * d.dx + p.dx, y, z: anchor.z + 2 * d.dz + p.dz }; // side nook
-    if (![E, R1, R2].every(colFree)) continue;
-    [E, R1, R2].forEach(c => occ.set(`${c.x},${c.z}`, c.y));
-    setBlock(E, 'normal'); setBlock(R1, 'normal'); setBlock(R2, 'normal');
-    lvl.prisms.set(`${R1.x},${R1.y},${R1.z}`, { type: 'miniprism' });
-    roomsPlaced++;
-  }
-
-  // ── 8c) Exact-count hazard placement (AI Pro3) ──
-  // When explicit counts are supplied, place precisely that many tiles instead
-  // of the chance-based styling above. Lethal/collapsing tiles go only on
-  // optional branch cells; ice/booster only on non-critical backbone cells.
-  const optBackbone = () => path.filter(c => {
-    const k = `${c.x},${c.y},${c.z}`;
-    return k !== startKey && k !== exitKey && !lvl.prisms.has(k) && lvl.blocks.get(k) && lvl.blocks.get(k).type === 'normal';
-  });
-  const optBranch = () => branchCells.filter(c => {
-    const k = `${c.x},${c.y},${c.z}`;
-    return !lvl.prisms.has(k) && lvl.blocks.get(k) && lvl.blocks.get(k).type === 'normal';
-  });
-  const placeExact = (pool, count, assign) => {
-    const shuffled = pool.sort(() => 0.5 - Math.random());
-    let placed = 0;
-    for (const c of shuffled) {
-      if (placed >= count) break;
-      const k = `${c.x},${c.y},${c.z}`;
-      const b = lvl.blocks.get(k);
-      if (!b || b.type !== 'normal' || lvl.prisms.has(k)) continue;
-      assign(b, c, k);
-      placed++;
-    }
-  };
-  // Collapse = fragile + shaker, split roughly in half (branch cells only).
-  if (typeof P.collapseCount === 'number' && P.collapseCount > 0) {
-    let n = 0;
-    placeExact(optBranch(), P.collapseCount, b => { b.type = (n++ % 2 === 0) ? 'fragile' : 'shaker'; });
-  }
-  if (typeof P.dangerCount === 'number' && P.dangerCount > 0) {
-    placeExact(optBranch(), P.dangerCount, b => { b.type = 'danger'; });
-  }
-  if (typeof P.iceCount === 'number' && P.iceCount > 0) {
-    // Prefer backbone, spill onto branches if the path runs short.
-    placeExact(optBackbone().concat(optBranch()), P.iceCount, b => { b.type = 'ice'; });
-  }
-  if (typeof P.boosterCount === 'number' && P.boosterCount > 0) {
-    placeExact(optBackbone(), P.boosterCount, b => { b.type = 'booster'; });
-  }
-
-  // ── 8d) Eis-Korridore (AI Pro3): long straight slides along the backbone ──
-  // Convert short collinear, same-height runs of non-critical backbone cells to
-  // ice, for sustained sliding (distinct from the scattered ice above).
-  if (P.iceCorridors > 0) {
-    const corrLen = 3;
-    const starts = [];
-    for (let i = 1; i + corrLen <= path.length; i++) starts.push(i);
-    starts.sort(() => 0.5 - Math.random());
-    const used = new Set();
-    let corrPlaced = 0;
-    for (const i of starts) {
-      if (corrPlaced >= P.iceCorridors) break;
-      const run = path.slice(i, i + corrLen);
-      const stepX = run[1].x - run[0].x, stepZ = run[1].z - run[0].z;
-      let ok = true;
-      for (let j = 0; j < run.length; j++) {
-        const c = run[j], k = `${c.x},${c.y},${c.z}`;
-        const collinear = j === 0 || (c.x - run[j - 1].x === stepX && c.z - run[j - 1].z === stepZ && c.y === run[0].y);
-        const b = lvl.blocks.get(k);
-        if (used.has(k) || k === startKey || k === exitKey || lvl.prisms.has(k) || !b || b.type !== 'normal' || !collinear) { ok = false; break; }
-      }
-      if (!ok) continue;
-      run.forEach(c => { const k = `${c.x},${c.y},${c.z}`; lvl.blocks.get(k).type = 'ice'; used.add(k); });
-      corrPlaced++;
-    }
-  }
-
-  // ── 9) Enemies on far backbone cells ──
-  const farCells = path.slice(Math.floor(path.length * 0.55)).filter(c => {
-    const k = `${c.x},${c.y},${c.z}`;
-    return k !== exitKey && lvl.blocks.get(k).type === 'normal';
-  }).sort(() => 0.5 - Math.random());
-  for (let i = 0; i < Math.min(P.enemies, farCells.length); i++) {
-    const c = farCells[i];
-    lvl.enemies.set(`${c.x},${c.y},${c.z}`, {});
-  }
-
-  // ── 9.5) Plutonium & Container placement (AI Pro3) ──
-  if (P.plutonium && P.plutonium > 0) {
-    const possiblePlutoniumCells = path.filter(c => {
-      const k = `${c.x},${c.y},${c.z}`;
-      return k !== startKey && k !== exitKey && lvl.blocks.get(k).type === 'normal' && !lvl.prisms.has(k);
-    }).sort(() => 0.5 - Math.random());
-
-    const numPlutonium = Math.min(P.plutonium, possiblePlutoniumCells.length);
-    for (let i = 0; i < numPlutonium; i++) {
-      const c = possiblePlutoniumCells[i];
-      lvl.prisms.set(`${c.x},${c.y},${c.z}`, { type: 'plutonium' });
-    }
-
-    const possibleContainerCells = path.filter(c => {
-      const k = `${c.x},${c.y},${c.z}`;
-      return k !== startKey && k !== exitKey && lvl.blocks.get(k).type === 'normal' && !lvl.prisms.has(k);
-    }).sort(() => 0.5 - Math.random());
-
-    if (possibleContainerCells.length > 0) {
-      const c = possibleContainerCells[0];
-      setBlock(c, 'container');
-    }
-  }
-
-  // ── 10) Validate solvability; repair as a safety net ──
-  // Switch-gate softlock guard: a triggered bridge is only fair if its switch
-  // can be reached WITHOUT crossing any (still-closed) triggered bridge. If not,
-  // drop the trigger so the bridge is permanently open — never a softlock.
-  const trigBridges = new Map(); // bridgeKey → switchKey
-  lvl.links.forEach(l => { if (l.type === 'switch-trigger') trigBridges.set(l.to, l.from); });
-  if (trigBridges.size) {
-    const noBridge = new Map();
-    lvl.blocks.forEach((b, k) => { if (!trigBridges.has(k)) noBridge.set(k, b); });
-    const reachNoBridge = archReachable(noBridge, lvl.start);
-    trigBridges.forEach((sk, bk) => {
-      if (!reachNoBridge.has(sk)) lvl.links = lvl.links.filter(l => !(l.type === 'switch-trigger' && l.to === bk));
-    });
-  }
-
-  let reach = archReachable(lvl.blocks, lvl.start);
-  // Drop any mandatory prism that somehow ended up unreachable.
-  [...lvl.prisms.entries()].forEach(([k, p]) => {
-    if (p.type === 'prism' && !reach.has(k)) lvl.prisms.delete(k);
-  });
-  // If the exit is blocked (shouldn't happen with a clean backbone), peel back
-  // danger tiles until it opens up.
-  let safety = 0;
-  while (!reach.has(exitKey) && safety++ < 40) {
-    let changed = false;
-    lvl.blocks.forEach(b => {
-      if (!changed && b.type === 'danger') { b.type = 'normal'; changed = true; }
-    });
-    if (!changed) break;
-    reach = archReachable(lvl.blocks, lvl.start);
-  }
-
-  lvl.par = Math.max(6, Math.round(path.length * P.parFactor + prismCount * 2));
-  return lvl;
-}
 
 /* ═══════════════════════════════════════════════════════════
    LEVEL EDITOR IMPLEMENTATION
    ═══════════════════════════════════════════════════════════ */
 // Snapshot the current level onto the undo history before a mutating edit.
 function pushUndoSnapshot() {
-  if (!activeLevel) return;
-  undoStack.push(serializeLevel(activeLevel));
-  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  if (!S.activeLevel) return;
+  S.undoStack.push(serializeLevel(S.activeLevel));
+  if (S.undoStack.length > UNDO_LIMIT) S.undoStack.shift();
   updateUndoButton();
 }
 
 function editorUndo() {
-  if (!isEditMode || isPlaytesting) return;
-  if (!undoStack.length) { showMessage('NOTHING TO UNDO', 1); return; }
-  const snap = undoStack.pop();
+  if (!S.isEditMode || S.isPlaytesting) return;
+  if (!S.undoStack.length) { showMessage('NOTHING TO UNDO', 1); return; }
+  const snap = S.undoStack.pop();
   const lvl = deserializeLevel(snap);
   document.getElementById('level-name-input').value = lvl.name;
   document.getElementById('world-select').value = lvl.world;
-  buildLevel3D(lvl); // sets activeLevel and rebuilds meshes
+  buildLevel3D(lvl); // sets S.activeLevel and rebuilds meshes
   drawEditorWires();
   updateEditorSlicing();
   renderVerticalRuler();
   updateUndoButton();
-  showMessage(`UNDO — ${undoStack.length} STEP${undoStack.length === 1 ? '' : 'S'} LEFT`, 1);
+  showMessage(`UNDO — ${S.undoStack.length} STEP${S.undoStack.length === 1 ? '' : 'S'} LEFT`, 1);
   audio.playUndo();
 }
 
 function updateUndoButton() {
   const btn = document.getElementById('btn-undo');
-  if (btn) btn.disabled = undoStack.length === 0;
+  if (btn) btn.disabled = S.undoStack.length === 0;
 }
 
 function enterEditMode() {
-  if (isEditMode) return;
-  isEditMode = true;
-  undoStack = [];
+  if (S.isEditMode) return;
+  S.isEditMode = true;
+  S.undoStack = [];
   updateUndoButton();
   document.getElementById('editor-ui').style.display = 'block';
   document.getElementById('hud').style.display = 'none';
   document.getElementById('controls-hint').style.display = 'none';
 
   // Spawn Editor Camera values
-  editorCameraTarget.copy(playerCube ? playerCube.position : new THREE.Vector3(0,0,0));
-  editorCameraZoom = 15;
+  S.editorCameraTarget.copy(S.playerCube ? S.playerCube.position : new THREE.Vector3(0,0,0));
+  S.editorCameraZoom = 15;
 
   // Add Grid Helper
-  editorGridHelper = new THREE.GridHelper(50, 50, 0x00ccff, 0x223344);
-  editorGridHelper.position.set(0.5, editY - 0.49, 0.5);
-  scene.add(editorGridHelper);
+  S.editorGridHelper = new THREE.GridHelper(50, 50, 0x00ccff, 0x223344);
+  S.editorGridHelper.position.set(0.5, S.editY - 0.49, 0.5);
+  scene.add(S.editorGridHelper);
 
   // Add Transparent Grid Plane (disabled at user request to avoid transparency)
   const planeGeo = new THREE.PlaneGeometry(50, 50);
   const planeMat = new THREE.MeshBasicMaterial({ visible: false });
-  editorGridPlane = new THREE.Mesh(planeGeo, planeMat);
-  editorGridPlane.rotation.x = -Math.PI/2;
-  editorGridPlane.position.set(0.5, editY - 0.49, 0.5);
-  scene.add(editorGridPlane);
+  S.editorGridPlane = new THREE.Mesh(planeGeo, planeMat);
+  S.editorGridPlane.rotation.x = -Math.PI/2;
+  S.editorGridPlane.position.set(0.5, S.editY - 0.49, 0.5);
+  scene.add(S.editorGridPlane);
 
   // Add Ghost Block (wireframe representation to avoid transparency)
-  editorGhostBlock = new THREE.Mesh(geoTile, new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true }));
-  scene.add(editorGhostBlock);
+  S.editorGhostBlock = new THREE.Mesh(geoTile, new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true }));
+  scene.add(S.editorGhostBlock);
 
   // Add Plane Preview (wireframe box helper shown while drawing a rectangular area with V held)
-  editorPlanePreview = new THREE.Mesh(
+  S.editorPlanePreview = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshBasicMaterial({ color: 0x00ffaa, wireframe: true, depthTest: false })
   );
-  editorPlanePreview.visible = false;
-  scene.add(editorPlanePreview);
+  S.editorPlanePreview.visible = false;
+  scene.add(S.editorPlanePreview);
 
-  editorWiresGroup = new THREE.Group();
-  scene.add(editorWiresGroup);
+  S.editorWiresGroup = new THREE.Group();
+  scene.add(S.editorWiresGroup);
 
   // Build temporary level if none exists
-  if (!activeLevel) {
-    activeLevel = new Level3D();
-    lvlInsertDefaultBlocks(activeLevel);
+  if (!S.activeLevel) {
+    S.activeLevel = new Level3D();
+    lvlInsertDefaultBlocks(S.activeLevel);
   }
-  buildLevel3D(activeLevel);
+  buildLevel3D(S.activeLevel);
   drawEditorWires();
   updateLibraryList();
 
   // Usability updates
-  document.getElementById('btn-toggle-slice').textContent = sliceModeActive ? 'Slice: ON' : 'Slice: OFF';
-  document.getElementById('btn-toggle-slice').className = `editor-btn ${sliceModeActive ? 'success' : 'danger'}`;
+  document.getElementById('btn-toggle-slice').textContent = S.sliceModeActive ? 'Slice: ON' : 'Slice: OFF';
+  document.getElementById('btn-toggle-slice').className = `editor-btn ${S.sliceModeActive ? 'success' : 'danger'}`;
   renderVerticalRuler();
   updateEditorSlicing();
 }
 
 function exitEditMode() {
-  if (!isEditMode) return;
-  isEditMode = false;
-  isPainting = false;
-  currentGroupId = null;
+  if (!S.isEditMode) return;
+  S.isEditMode = false;
+  S.isPainting = false;
+  S.currentGroupId = null;
   setGroupingUI(false);
   document.getElementById('editor-ui').style.display = 'none';
   document.getElementById('hud').style.display = 'flex';
   document.getElementById('editor-tooltip').style.display = 'none';
 
-  if (editorGridHelper) { scene.remove(editorGridHelper); editorGridHelper = null; }
-  if (editorGridPlane) { scene.remove(editorGridPlane); editorGridPlane = null; }
-  if (editorGhostBlock) { scene.remove(editorGhostBlock); editorGhostBlock = null; }
-  if (editorWiresGroup) { scene.remove(editorWiresGroup); editorWiresGroup = null; }
-  if (editorPlanePreview) {
-    scene.remove(editorPlanePreview);
-    editorPlanePreview.geometry.dispose();
-    editorPlanePreview.material.dispose();
-    editorPlanePreview = null;
+  if (S.editorGridHelper) { scene.remove(S.editorGridHelper); S.editorGridHelper = null; }
+  if (S.editorGridPlane) { scene.remove(S.editorGridPlane); S.editorGridPlane = null; }
+  if (S.editorGhostBlock) { scene.remove(S.editorGhostBlock); S.editorGhostBlock = null; }
+  if (S.editorWiresGroup) { scene.remove(S.editorWiresGroup); S.editorWiresGroup = null; }
+  if (S.editorPlanePreview) {
+    scene.remove(S.editorPlanePreview);
+    S.editorPlanePreview.geometry.dispose();
+    S.editorPlanePreview.material.dispose();
+    S.editorPlanePreview = null;
   }
 
   // Reset slicing opacities / visibilities
   updateEditorSlicing();
 
-  loadPreMadeLevel(currentLevelIdx);
+  loadPreMadeLevel(S.currentLevelIdx);
 }
 
 function lvlInsertDefaultBlocks(lvl) {
@@ -2542,42 +1479,42 @@ function renderVerticalRuler() {
   container.innerHTML = '';
   for (let y = rulerMaxY; y >= rulerMinY; y--) {
     const btn = document.createElement('button');
-    btn.className = `ruler-level-btn ${y === editY ? 'active' : ''}`;
+    btn.className = `ruler-level-btn ${y === S.editY ? 'active' : ''}`;
     btn.textContent = y;
     btn.addEventListener('click', () => {
-      adjustEditHeight(y - editY);
+      adjustEditHeight(y - S.editY);
     });
     container.appendChild(btn);
   }
 }
 
 function updateEditorSlicing() {
-  if (!isEditMode || isPlaytesting) {
-    activeBlocks.forEach(b => {
+  if (!S.isEditMode || S.isPlaytesting) {
+    S.activeBlocks.forEach(b => {
       if (b.mesh) {
         b.mesh.visible = true;
         setMeshOpacity(b.mesh, 1.0, true);
       }
       if (b.pillar) b.pillar.visible = true;
     });
-    activePrisms.forEach(p => {
+    S.activePrisms.forEach(p => {
       if (p.mesh) p.mesh.visible = true;
     });
-    movingPlatformsList.forEach(mp => {
+    S.movingPlatformsList.forEach(mp => {
       mp.mesh.visible = true;
     });
     applyXrayOverride();
     return;
   }
-  activeBlocks.forEach(b => {
+  S.activeBlocks.forEach(b => {
     if (!b.mesh) return;
-    if (sliceModeActive && b.y > editY) {
+    if (S.sliceModeActive && b.y > S.editY) {
       b.mesh.visible = false;
       if (b.pillar) b.pillar.visible = false;
     } else {
       b.mesh.visible = true;
       if (b.pillar) b.pillar.visible = true;
-      const isBelow = (sliceModeActive && b.y < editY);
+      const isBelow = (S.sliceModeActive && b.y < S.editY);
       const isInactiveBridge = (b.type === 'bridge' && b.active === false);
       if (isBelow) {
         b.mesh.traverse(m => {
@@ -2613,10 +1550,10 @@ function updateEditorSlicing() {
       }
     }
   });
-  activePrisms.forEach((p, k) => {
+  S.activePrisms.forEach((p, k) => {
     if (!p.mesh) return;
     const py = k.split(',').map(Number)[1]; // key is "x,y,z" → y is the height
-    if (sliceModeActive && py > editY) {
+    if (S.sliceModeActive && py > S.editY) {
       p.mesh.visible = false;
     } else {
       p.mesh.visible = true;
@@ -2624,9 +1561,9 @@ function updateEditorSlicing() {
       p.mesh.material.opacity = 1.0;
     }
   });
-  enemyMarkers.forEach((m, k) => {
+  S.enemyMarkers.forEach((m, k) => {
     const ey = k.split(',').map(Number)[1];
-    if (sliceModeActive && ey > editY) {
+    if (S.sliceModeActive && ey > S.editY) {
       m.visible = false;
     } else {
       m.visible = true;
@@ -2634,9 +1571,9 @@ function updateEditorSlicing() {
       m.material.opacity = 1.0;
     }
   });
-  movingPlatformsList.forEach(mp => {
+  S.movingPlatformsList.forEach(mp => {
     const mpy = Math.round(mp.position.y);
-    if (sliceModeActive && mpy > editY) {
+    if (S.sliceModeActive && mpy > S.editY) {
       mp.mesh.visible = false;
     } else {
       mp.mesh.visible = true;
@@ -2656,39 +1593,39 @@ function applyXrayOverride() {
 }
 
 function toggleXray() {
-  xrayMode = !xrayMode;
-  audio.playXrayToggle(xrayMode);
+  S.xrayMode = !S.xrayMode;
+  audio.playXrayToggle(S.xrayMode);
   updateEditorSlicing();        // editor: applies / restores slicing opacity
   updateDynamicTransparency();  // play: apply (or clear) the see-through pass at once
-  showMessage(xrayMode ? 'X-RAY VIEW ON' : 'X-RAY VIEW OFF', 1.2);
+  showMessage(S.xrayMode ? 'X-RAY VIEW ON' : 'X-RAY VIEW OFF', 1.2);
 }
 
 // Orbit the camera around the (frozen) player while paused. Player stays centred.
 function updatePauseOrbitCamera() {
-  if (!playerCube) return;
-  const t = playerCube.position;
+  if (!S.playerCube) return;
+  const t = S.playerCube.position;
   camera.position.set(
-    t.x + Math.sin(pauseYaw) * Math.cos(pausePitch) * pauseZoom,
-    t.y + Math.sin(pausePitch) * pauseZoom,
-    t.z + Math.cos(pauseYaw) * Math.cos(pausePitch) * pauseZoom
+    t.x + Math.sin(S.pauseYaw) * Math.cos(S.pausePitch) * S.pauseZoom,
+    t.y + Math.sin(S.pausePitch) * S.pauseZoom,
+    t.z + Math.cos(S.pauseYaw) * Math.cos(S.pausePitch) * S.pauseZoom
   );
   camera.lookAt(t);
 }
 
 function togglePause() {
-  if (isEditMode && !isPlaytesting) return; // pause only applies to play / playtest
-  isPaused = !isPaused;
-  audio.playPauseToggle(isPaused);
+  if (S.isEditMode && !S.isPlaytesting) return; // pause only applies to play / playtest
+  S.isPaused = !S.isPaused;
+  audio.playPauseToggle(S.isPaused);
   const ov = document.getElementById('pause-overlay');
-  if (isPaused) {
+  if (S.isPaused) {
     // Seed the orbit from the current camera so there's no jump on pause.
-    if (playerCube) {
-      const rel = camera.position.clone().sub(playerCube.position);
-      pauseZoom = Math.max(3, rel.length());
-      pausePitch = Math.asin(THREE.MathUtils.clamp(rel.y / pauseZoom, -1, 1));
-      pauseYaw = Math.atan2(rel.x, rel.z);
+    if (S.playerCube) {
+      const rel = camera.position.clone().sub(S.playerCube.position);
+      S.pauseZoom = Math.max(3, rel.length());
+      S.pausePitch = Math.asin(THREE.MathUtils.clamp(rel.y / S.pauseZoom, -1, 1));
+      S.pauseYaw = Math.atan2(rel.x, rel.z);
     }
-    pausePointers.clear(); pausePinchDist = null;
+    S.pausePointers.clear(); S.pausePinchDist = null;
     ov && ov.classList.add('show');
   } else {
     ov && ov.classList.remove('show');
@@ -2696,21 +1633,20 @@ function togglePause() {
 }
 
 function loadDemoLevel() {
-  isCustomLevel = true;
-  playerLives = MAX_LIVES;
-  activeLevel = deserializeLevel(JSON.stringify(DEMO_LEVEL));
-  document.getElementById('level-name-input').value = activeLevel.name;
-  document.getElementById('world-select').value = activeLevel.world;
-  buildLevel3D(activeLevel);
-  if (isEditMode && !isPlaytesting) drawEditorWires();
+  S.isCustomLevel = true;
+  S.playerLives = MAX_LIVES;
+  S.activeLevel = deserializeLevel(JSON.stringify(DEMO_LEVEL));
+  document.getElementById('level-name-input').value = S.activeLevel.name;
+  document.getElementById('world-select').value = S.activeLevel.world;
+  buildLevel3D(S.activeLevel);
+  if (S.isEditMode && !S.isPlaytesting) drawEditorWires();
   showMessage('DEMO LEVEL LOADED');
 }
 
-let libraryListToken = 0; // guards async folder-level appends against stale refreshes
 
 function updateLibraryList() {
   const list = document.getElementById('custom-levels-list');
-  const token = ++libraryListToken;
+  const token = ++S.libraryListToken;
   list.innerHTML = '';
   // Built-in demo level showcasing every gameplay element
   const demoItem = document.createElement('div');
@@ -2731,11 +1667,11 @@ function updateLibraryList() {
     div.className = 'library-item';
     div.innerHTML = `<span>${name}</span><button class="delete-btn">×</button>`;
     div.querySelector('span').addEventListener('click', () => {
-      isCustomLevel = true;
-      activeLevel = deserializeLevel(store[name]);
-      document.getElementById('level-name-input').value = activeLevel.name;
-      document.getElementById('world-select').value = activeLevel.world;
-      buildLevel3D(activeLevel);
+      S.isCustomLevel = true;
+      S.activeLevel = deserializeLevel(store[name]);
+      document.getElementById('level-name-input').value = S.activeLevel.name;
+      document.getElementById('world-select').value = S.activeLevel.world;
+      buildLevel3D(S.activeLevel);
       drawEditorWires();
       showMessage('LEVEL LOADED');
       document.getElementById('editor-library-panel').style.display = 'none';
@@ -2774,7 +1710,7 @@ async function loadFolderLevels(list, token) {
     }
   }
   for (const file of files) {
-    if (token !== libraryListToken) return; // a newer refresh superseded us
+    if (token !== S.libraryListToken) return; // a newer refresh superseded us
     let jsonStr;
     try {
       const r = await fetch(`level/${file}`, { cache: 'no-store' });
@@ -2783,16 +1719,16 @@ async function loadFolderLevels(list, token) {
     } catch (e) { continue; }
     let data;
     try { data = JSON.parse(jsonStr); } catch (e) { continue; }
-    if (token !== libraryListToken) return;
+    if (token !== S.libraryListToken) return;
     const div = document.createElement('div');
     div.className = 'library-item';
     div.innerHTML = `<span style="color:var(--accent2);">📁 ${data.name || file}</span>`;
     div.querySelector('span').addEventListener('click', () => {
-      isCustomLevel = true;
-      activeLevel = deserializeLevel(jsonStr);
-      document.getElementById('level-name-input').value = activeLevel.name;
-      document.getElementById('world-select').value = activeLevel.world;
-      buildLevel3D(activeLevel);
+      S.isCustomLevel = true;
+      S.activeLevel = deserializeLevel(jsonStr);
+      document.getElementById('level-name-input').value = S.activeLevel.name;
+      document.getElementById('world-select').value = S.activeLevel.world;
+      buildLevel3D(S.activeLevel);
       drawEditorWires();
       showMessage('LEVEL LOADED');
       document.getElementById('editor-library-panel').style.display = 'none';
@@ -2802,16 +1738,16 @@ async function loadFolderLevels(list, token) {
 }
 
 function drawEditorWires() {
-  if (!editorWiresGroup) return;
+  if (!S.editorWiresGroup) return;
   // Clear old
-  while (editorWiresGroup.children.length) {
-    const c = editorWiresGroup.children[0];
+  while (S.editorWiresGroup.children.length) {
+    const c = S.editorWiresGroup.children[0];
     disposeMaterial(c.material);
-    editorWiresGroup.remove(c);
+    S.editorWiresGroup.remove(c);
   }
 
   // Draw wire paths for links
-  activeLevel.links.forEach(l => {
+  S.activeLevel.links.forEach(l => {
     let matColor = 0x00ffff;
     let fromPos, toPos;
     if (l.type === 'switch-trigger') {
@@ -2831,14 +1767,14 @@ function drawEditorWires() {
       const geo = new THREE.BufferGeometry().setFromPoints([fromPos, toPos]);
       const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: matColor, dashSize: 0.3, gapSize: 0.15 }));
       line.computeLineDistances();
-      editorWiresGroup.add(line);
+      S.editorWiresGroup.add(line);
     }
   });
 
   // Draw faint links between members of each compound object so groupings
   // are visible in the editor.
   const groups = new Map(); // groupId -> [block,...]
-  activeLevel.blocks.forEach(b => {
+  S.activeLevel.blocks.forEach(b => {
     const g = b.properties && b.properties.group;
     if (g === undefined || g === null) return;
     if (!groups.has(g)) groups.set(g, []);
@@ -2854,31 +1790,31 @@ function drawEditorWires() {
       const geo = new THREE.BufferGeometry().setFromPoints([centroid, new THREE.Vector3(b.x, b.y + 0.5, b.z)]);
       const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xffaa00, dashSize: 0.18, gapSize: 0.12, opacity: 1.0, transparent: false }));
       line.computeLineDistances();
-      editorWiresGroup.add(line);
+      S.editorWiresGroup.add(line);
     });
   });
 
   // While grouping (O held), wrap every member of the active group in a bright
   // orange wireframe box so it's obvious which blocks are being combined.
-  if (currentGroupId !== null) {
+  if (S.currentGroupId !== null) {
     const boxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.12, 1.12, 1.12));
-    activeLevel.blocks.forEach(b => {
-      if (!b.properties || b.properties.group !== currentGroupId) return;
+    S.activeLevel.blocks.forEach(b => {
+      if (!b.properties || b.properties.group !== S.currentGroupId) return;
       const yOff = (b.type === 'bridge') ? 0.4 : 0;
       const box = new THREE.LineSegments(boxGeo, new THREE.LineBasicMaterial({ color: 0xffbb33 }));
       box.position.set(b.x, b.y + yOff, b.z);
-      editorWiresGroup.add(box);
+      S.editorWiresGroup.add(box);
     });
   }
 
   // Draw paths for moving platforms
-  activeLevel.blocks.forEach((b, k) => {
+  S.activeLevel.blocks.forEach((b, k) => {
     if (b.type === 'moving' && b.properties.targetX !== undefined) {
       const start = new THREE.Vector3(b.x, b.y + 0.5, b.z);
       const end = new THREE.Vector3(b.properties.targetX, b.properties.targetY + 0.5, b.properties.targetZ);
       const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
       const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x44aa55 }));
-      editorWiresGroup.add(line);
+      S.editorWiresGroup.add(line);
     }
   });
 }
@@ -2904,7 +1840,7 @@ function editorRaycast(e) {
     const targetPos = blockPos.clone();
     // Only block tools build adjacent to the clicked face; items (start/exit/
     // prism), eraser and linker target the clicked cell itself.
-    if (BLOCK_TOOLS.includes(selectedTool)) {
+    if (BLOCK_TOOLS.includes(S.selectedTool)) {
       targetPos.add(normal);
     }
     return {
@@ -2917,12 +1853,12 @@ function editorRaycast(e) {
   }
 
   // Fallback to editing grid helper plane
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(editY - 0.5));
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(S.editY - 0.5));
   const intersectPoint = new THREE.Vector3();
   if (raycaster.ray.intersectPlane(plane, intersectPoint)) {
     return {
       x: Math.round(intersectPoint.x),
-      y: Math.round(editY),
+      y: Math.round(S.editY),
       z: Math.round(intersectPoint.z),
       hitKey: null,
       hitType: null
@@ -2941,7 +1877,7 @@ function snapItemCell(hit) {
     return { x: hit.x, y: hit.y, z: hit.z };
   }
   let topY = null;
-  activeLevel.blocks.forEach(b => {
+  S.activeLevel.blocks.forEach(b => {
     if (b.x === hit.x && b.z === hit.z && b.y <= hit.y && (topY === null || b.y > topY)) topY = b.y;
   });
   return { x: hit.x, y: topY !== null ? topY : hit.y, z: hit.z };
@@ -2951,43 +1887,43 @@ function snapItemCell(hit) {
 // every placed/erased voxel, which made painting large levels laggy.
 function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
   let removed = false;
-  if (kinds.includes('enemy') && activeLevel.enemies.has(key)) {
-    activeLevel.enemies.delete(key);
-    const m = enemyMarkers.get(key);
+  if (kinds.includes('enemy') && S.activeLevel.enemies.has(key)) {
+    S.activeLevel.enemies.delete(key);
+    const m = S.enemyMarkers.get(key);
     if (m) {
       prismsGroup.remove(m);
       disposeMaterial(m.material);
       m.children.forEach(ch => { if (ch.geometry) ch.geometry.dispose(); disposeMaterial(ch.material); });
     }
-    enemyMarkers.delete(key);
+    S.enemyMarkers.delete(key);
     removed = true;
   }
-  if (kinds.includes('prism') && activeLevel.prisms.has(key)) {
-    activeLevel.prisms.delete(key);
-    const p = activePrisms.get(key);
+  if (kinds.includes('prism') && S.activeLevel.prisms.has(key)) {
+    S.activeLevel.prisms.delete(key);
+    const p = S.activePrisms.get(key);
     if (p && p.mesh) { prismsGroup.remove(p.mesh); disposeMaterial(p.mesh.material); }
-    activePrisms.delete(key);
+    S.activePrisms.delete(key);
     removed = true;
   }
-  if (kinds.includes('block') && activeLevel.blocks.has(key)) {
-    const hasLinks = activeLevel.links.some(l => l.from === key || l.to === key || l.k1 === key || l.k2 === key);
-    activeLevel.blocks.delete(key);
+  if (kinds.includes('block') && S.activeLevel.blocks.has(key)) {
+    const hasLinks = S.activeLevel.links.some(l => l.from === key || l.to === key || l.k1 === key || l.k2 === key);
+    S.activeLevel.blocks.delete(key);
     if (hasLinks) {
       // Removing a linked block changes trigger wiring — full rebuild
-      activeLevel.links = activeLevel.links.filter(l => l.from !== key && l.to !== key && l.k1 !== key && l.k2 !== key);
-      if (!batchEditing) {
-        buildLevel3D(activeLevel);
+      S.activeLevel.links = S.activeLevel.links.filter(l => l.from !== key && l.to !== key && l.k1 !== key && l.k2 !== key);
+      if (!S.batchEditing) {
+        buildLevel3D(S.activeLevel);
         drawEditorWires();
       } else {
-        batchRebuildNeeded = true;
+        S.batchRebuildNeeded = true;
       }
       return true;
     }
-    const b = activeBlocks.get(key);
+    const b = S.activeBlocks.get(key);
     if (b) {
       if (b.platformInstance) {
-        const i = movingPlatformsList.indexOf(b.platformInstance);
-        if (i >= 0) movingPlatformsList.splice(i, 1);
+        const i = S.movingPlatformsList.indexOf(b.platformInstance);
+        if (i >= 0) S.movingPlatformsList.splice(i, 1);
         b.platformInstance.dispose();
       }
       if (b.mesh) {
@@ -2995,10 +1931,10 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
         disposeMaterial(b.mesh.material);
         b.mesh.children.forEach(ch => { disposeMaterial(ch.material); });
       }
-      activeBlocks.delete(key);
+      S.activeBlocks.delete(key);
     }
     removed = true;
-    if (!batchEditing) {
+    if (!S.batchEditing) {
       drawEditorWires();
     }
   }
@@ -3007,26 +1943,26 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
 
 function editorPlaceBlock(x, y, z, type) {
   const key = `${x},${y},${z}`;
-  const existing = activeLevel.blocks.get(key);
+  const existing = S.activeLevel.blocks.get(key);
   if (existing && existing.type === type) return false;
   if (existing) editorEraseKey(key, ['block']);
   const b = { x, y, z, type, properties: {} };
-  if (currentGroupId !== null) b.properties.group = currentGroupId;
-  activeLevel.blocks.set(key, b);
+  if (S.currentGroupId !== null) b.properties.group = S.currentGroupId;
+  S.activeLevel.blocks.set(key, b);
   const rb = { ...b, broken: false, active: true };
-  activeBlocks.set(key, rb);
+  S.activeBlocks.set(key, rb);
   if (type === 'moving') {
     const mp = new MovingPlatform(key, x, y, z, x, y, z, 1.5, true);
-    movingPlatformsList.push(mp);
+    S.movingPlatformsList.push(mp);
     rb.platformInstance = mp;
   } else {
     createBlockMesh(rb, key);
   }
-  if (!batchEditing) {
+  if (!S.batchEditing) {
     updateEditorSlicing();
     // While grouping (O held), give live audio + visual feedback per added block.
-    if (currentGroupId !== null) {
-      audio.playGroupAdd(groupMemberCount(currentGroupId));
+    if (S.currentGroupId !== null) {
+      audio.playGroupAdd(groupMemberCount(S.currentGroupId));
       refreshGroupingIndicator();
       drawEditorWires();
     }
@@ -3036,12 +1972,12 @@ function editorPlaceBlock(x, y, z, type) {
 
 function editorPlacePrism(x, y, z, type) {
   const key = `${x},${y},${z}`;
-  const existing = activeLevel.prisms.get(key);
+  const existing = S.activeLevel.prisms.get(key);
   if (existing && existing.type === type) return false;
   if (existing) editorEraseKey(key, ['prism']);
-  activeLevel.prisms.set(key, { type });
+  S.activeLevel.prisms.set(key, { type });
   const p = { type, collected: false };
-  activePrisms.set(key, p);
+  S.activePrisms.set(key, p);
   createPrismMesh(key, p);
   updateEditorSlicing();
   return true;
@@ -3049,26 +1985,26 @@ function editorPlacePrism(x, y, z, type) {
 
 function editorPlaceEnemy(x, y, z) {
   const key = `${x},${y},${z}`;
-  if (activeLevel.enemies.has(key)) return false;
-  activeLevel.enemies.set(key, {});
+  if (S.activeLevel.enemies.has(key)) return false;
+  S.activeLevel.enemies.set(key, {});
   createEnemyMarker(key);
   updateEditorSlicing();
   return true;
 }
 
 function editorSetStart(c) {
-  activeLevel.start = { x: c.x, y: c.y, z: c.z };
-  playerGridPos = { ...activeLevel.start };
-  if (playerCube) {
-    playerCube.position.copy(getPlayerWorldPos(c.x, c.y, c.z, false));
-    playerCube.quaternion.identity();
+  S.activeLevel.start = { x: c.x, y: c.y, z: c.z };
+  S.playerGridPos = { ...S.activeLevel.start };
+  if (S.playerCube) {
+    S.playerCube.position.copy(getPlayerWorldPos(c.x, c.y, c.z, false));
+    S.playerCube.quaternion.identity();
   }
   audio.playPlace('start');
 }
 
 function editorFillPlane(y, type) {
-  batchEditing = true;
-  batchRebuildNeeded = false;
+  S.batchEditing = true;
+  S.batchRebuildNeeded = false;
   let placedAny = false;
 
   for (let x = -25; x <= 25; x++) {
@@ -3079,9 +2015,9 @@ function editorFillPlane(y, type) {
     }
   }
 
-  batchEditing = false;
-  if (batchRebuildNeeded) {
-    buildLevel3D(activeLevel);
+  S.batchEditing = false;
+  if (S.batchRebuildNeeded) {
+    buildLevel3D(S.activeLevel);
   } else if (placedAny) {
     updateEditorSlicing();
   }
@@ -3089,19 +2025,19 @@ function editorFillPlane(y, type) {
 }
 
 function editorClearPlane(y) {
-  batchEditing = true;
-  batchRebuildNeeded = false;
+  S.batchEditing = true;
+  S.batchRebuildNeeded = false;
   let erasedAny = false;
 
   const keysToErase = [];
-  activeLevel.blocks.forEach((b, k) => {
+  S.activeLevel.blocks.forEach((b, k) => {
     if (b.y === y) keysToErase.push({ key: k, kinds: ['block'] });
   });
-  activeLevel.prisms.forEach((p, k) => {
+  S.activeLevel.prisms.forEach((p, k) => {
     const py = k.split(',').map(Number)[1];
     if (py === y) keysToErase.push({ key: k, kinds: ['prism'] });
   });
-  activeLevel.enemies.forEach((e, k) => {
+  S.activeLevel.enemies.forEach((e, k) => {
     const ey = k.split(',').map(Number)[1];
     if (ey === y) keysToErase.push({ key: k, kinds: ['enemy'] });
   });
@@ -3112,9 +2048,9 @@ function editorClearPlane(y) {
     }
   });
 
-  batchEditing = false;
-  if (batchRebuildNeeded) {
-    buildLevel3D(activeLevel);
+  S.batchEditing = false;
+  if (S.batchRebuildNeeded) {
+    buildLevel3D(S.activeLevel);
   } else if (erasedAny) {
     updateEditorSlicing();
   }
@@ -3122,46 +2058,46 @@ function editorClearPlane(y) {
 }
 
 function commitPlaneDraw() {
-  if (!isDrawingPlane || !planeStartPos || !planeEndPos) return;
-  isDrawingPlane = false;
-  if (editorPlanePreview) editorPlanePreview.visible = false;
+  if (!S.isDrawingPlane || !S.planeStartPos || !S.planeEndPos) return;
+  S.isDrawingPlane = false;
+  if (S.editorPlanePreview) S.editorPlanePreview.visible = false;
 
-  const minX = Math.min(planeStartPos.x, planeEndPos.x);
-  const maxX = Math.max(planeStartPos.x, planeEndPos.x);
-  const minZ = Math.min(planeStartPos.z, planeEndPos.z);
-  const maxZ = Math.max(planeStartPos.z, planeEndPos.z);
+  const minX = Math.min(S.planeStartPos.x, S.planeEndPos.x);
+  const maxX = Math.max(S.planeStartPos.x, S.planeEndPos.x);
+  const minZ = Math.min(S.planeStartPos.z, S.planeEndPos.z);
+  const maxZ = Math.max(S.planeStartPos.z, S.planeEndPos.z);
 
   pushUndoSnapshot();
 
-  batchEditing = true;
-  batchRebuildNeeded = false;
+  S.batchEditing = true;
+  S.batchRebuildNeeded = false;
   let changedAny = false;
 
-  if (BLOCK_TOOLS.includes(selectedTool)) {
+  if (BLOCK_TOOLS.includes(S.selectedTool)) {
     for (let x = minX; x <= maxX; x++) {
       for (let z = minZ; z <= maxZ; z++) {
-        if (editorPlaceBlock(x, editY, z, selectedTool)) {
+        if (editorPlaceBlock(x, S.editY, z, S.selectedTool)) {
           changedAny = true;
         }
       }
     }
-    if (changedAny) audio.playPlace(selectedTool);
-  } else if (selectedTool === 'eraser') {
+    if (changedAny) audio.playPlace(S.selectedTool);
+  } else if (S.selectedTool === 'eraser') {
     const keysToErase = [];
-    activeLevel.blocks.forEach((b, k) => {
-      if (b.y === editY && b.x >= minX && b.x <= maxX && b.z >= minZ && b.z <= maxZ) {
+    S.activeLevel.blocks.forEach((b, k) => {
+      if (b.y === S.editY && b.x >= minX && b.x <= maxX && b.z >= minZ && b.z <= maxZ) {
         keysToErase.push({ key: k, kinds: ['block'] });
       }
     });
-    activeLevel.prisms.forEach((p, k) => {
+    S.activeLevel.prisms.forEach((p, k) => {
       const [px, py, pz] = k.split(',').map(Number);
-      if (py === editY && px >= minX && px <= maxX && pz >= minZ && pz <= maxZ) {
+      if (py === S.editY && px >= minX && px <= maxX && pz >= minZ && pz <= maxZ) {
         keysToErase.push({ key: k, kinds: ['prism'] });
       }
     });
-    activeLevel.enemies.forEach((e, k) => {
+    S.activeLevel.enemies.forEach((e, k) => {
       const [ex, ey, ez] = k.split(',').map(Number);
-      if (ey === editY && ex >= minX && ex <= maxX && ez >= minZ && ez <= maxZ) {
+      if (ey === S.editY && ex >= minX && ex <= maxX && ez >= minZ && ez <= maxZ) {
         keysToErase.push({ key: k, kinds: ['enemy'] });
       }
     });
@@ -3174,35 +2110,35 @@ function commitPlaneDraw() {
     if (changedAny) audio.playBreak();
   }
 
-  batchEditing = false;
-  if (batchRebuildNeeded) {
-    buildLevel3D(activeLevel);
+  S.batchEditing = false;
+  if (S.batchRebuildNeeded) {
+    buildLevel3D(S.activeLevel);
   } else if (changedAny) {
     updateEditorSlicing();
   }
   drawEditorWires();
 
-  planeStartPos = null;
-  planeEndPos = null;
+  S.planeStartPos = null;
+  S.planeEndPos = null;
 }
 
 function handleEditorClick(e) {
   const hit = editorRaycast(e);
   if (!hit) return;
 
-  if (keysPressed['KeyV']) {
-    if (BLOCK_TOOLS.includes(selectedTool)) {
-      editorFillPlane(editY, selectedTool);
-      audio.playPlace(selectedTool);
+  if (S.keysPressed['KeyV']) {
+    if (BLOCK_TOOLS.includes(S.selectedTool)) {
+      editorFillPlane(S.editY, S.selectedTool);
+      audio.playPlace(S.selectedTool);
       return;
-    } else if (selectedTool === 'eraser') {
-      editorClearPlane(editY);
+    } else if (S.selectedTool === 'eraser') {
+      editorClearPlane(S.editY);
       audio.playBreak();
       return;
     }
   }
 
-  if (selectedTool === 'eraser') {
+  if (S.selectedTool === 'eraser') {
     if (hit.hitKey) {
       let kinds = ['block'];
       if (hit.hitType === 'prism' || hit.hitType === 'miniprism') kinds = ['prism'];
@@ -3212,13 +2148,13 @@ function handleEditorClick(e) {
     return;
   }
 
-  if (selectedTool === 'linker') {
-    if (linkerSourceKey === null) {
+  if (S.selectedTool === 'linker') {
+    if (S.linkerSourceKey === null) {
       // Set Source
       if (!hit.hitKey) return;
-      const block = activeLevel.blocks.get(hit.hitKey);
+      const block = S.activeLevel.blocks.get(hit.hitKey);
       if (block && (block.type === 'switch' || block.type === 'pressureplate' || block.type === 'teleporter' || block.type === 'moving')) {
-        linkerSourceKey = hit.hitKey;
+        S.linkerSourceKey = hit.hitKey;
         const srcGroup = block.properties && block.properties.group;
         const srcGrouped = srcGroup !== undefined && srcGroup !== null;
         if (block.type === 'moving') showMessage(srcGrouped ? 'OBJECT SELECTED — CLICK DESTINATION CELL' : 'PLATFORM SELECTED — CLICK DESTINATION CELL');
@@ -3230,10 +2166,10 @@ function handleEditorClick(e) {
       return;
     }
     // Connect to Target
-    const source = activeLevel.blocks.get(linkerSourceKey);
-    const target = hit.hitKey ? activeLevel.blocks.get(hit.hitKey) : null;
+    const source = S.activeLevel.blocks.get(S.linkerSourceKey);
+    const target = hit.hitKey ? S.activeLevel.blocks.get(hit.hitKey) : null;
     let linked = false;
-    if (source && source.type === 'moving' && linkerSourceKey !== hit.hitKey) {
+    if (source && source.type === 'moving' && S.linkerSourceKey !== hit.hitKey) {
       // Moving platforms may target any cell, including empty grid cells.
       // For compound groups: apply the same displacement vector to every
       // mover in the group so the whole object travels as one piece.
@@ -3247,8 +2183,8 @@ function handleEditorClick(e) {
       const g = source.properties.group;
       let moverCount = 1;
       if (g !== undefined && g !== null) {
-        activeLevel.blocks.forEach((b, k) => {
-          if (b.properties && b.properties.group === g && b.type === 'moving' && k !== linkerSourceKey) {
+        S.activeLevel.blocks.forEach((b, k) => {
+          if (b.properties && b.properties.group === g && b.type === 'moving' && k !== S.linkerSourceKey) {
             b.properties.targetX = b.x + dispX;
             b.properties.targetY = b.y + dispY;
             b.properties.targetZ = b.z + dispZ;
@@ -3258,7 +2194,7 @@ function handleEditorClick(e) {
       }
       showMessage(moverCount > 1 ? `OBJECT DESTINATION SET (${moverCount} MOVERS)` : 'PLATFORM DESTINATION SET');
       linked = true;
-    } else if (source && target && linkerSourceKey !== hit.hitKey) {
+    } else if (source && target && S.linkerSourceKey !== hit.hitKey) {
       if (source.type === 'switch' || source.type === 'pressureplate') {
         // Accept any block as target — if it belongs to a compound group,
         // find all triggerable (bridge / moving) members of that group.
@@ -3267,7 +2203,7 @@ function handleEditorClick(e) {
         let members = [];
         if (target.type === 'bridge' || target.type === 'moving') members = [target];
         if (groupId !== undefined && groupId !== null) {
-          const groupLinkable = [...activeLevel.blocks.values()].filter(b =>
+          const groupLinkable = [...S.activeLevel.blocks.values()].filter(b =>
             b.properties && b.properties.group === groupId &&
             (b.type === 'bridge' || b.type === 'moving'));
           if (groupLinkable.length > 0) members = groupLinkable;
@@ -3275,8 +2211,8 @@ function handleEditorClick(e) {
         if (members.length > 0) {
           members.forEach(m => {
             const tk = `${m.x},${m.y},${m.z}`;
-            if (!activeLevel.links.some(l => l.type === 'switch-trigger' && l.from === linkerSourceKey && l.to === tk)) {
-              activeLevel.links.push({ type: 'switch-trigger', from: linkerSourceKey, to: tk });
+            if (!S.activeLevel.links.some(l => l.type === 'switch-trigger' && l.from === S.linkerSourceKey && l.to === tk)) {
+              S.activeLevel.links.push({ type: 'switch-trigger', from: S.linkerSourceKey, to: tk });
             }
           });
           showMessage(members.length > 1 ? `OBJECT TRIGGER LINKED (${members.length} ELEMENTS)` : 'TRIGGER LINKED');
@@ -3285,17 +2221,17 @@ function handleEditorClick(e) {
           showMessage('INVALID LINK TARGET — CLICK A BRIDGE, MOVER OR GROUPED OBJECT', 1.6);
         }
       } else if (source.type === 'teleporter' && target.type === 'teleporter') {
-        activeLevel.links.push({ type: 'teleporter-link', k1: linkerSourceKey, k2: hit.hitKey });
+        S.activeLevel.links.push({ type: 'teleporter-link', k1: S.linkerSourceKey, k2: hit.hitKey });
         showMessage('PORTALS LINKED');
         linked = true;
       } else {
         showMessage('INVALID LINK TARGET', 1.4);
       }
     }
-    linkerSourceKey = null;
+    S.linkerSourceKey = null;
     if (linked) {
       audio.playLinkSuccess();
-      buildLevel3D(activeLevel);
+      buildLevel3D(S.activeLevel);
       drawEditorWires();
     } else {
       audio.playLinkCancel();
@@ -3305,20 +2241,20 @@ function handleEditorClick(e) {
 
   // Placement tools — blocks go only onto the selected level (raise the height
   // ruler to build higher); drag-painting already snaps to that plane.
-  if (BLOCK_TOOLS.includes(selectedTool)) {
-    if (hit.y === editY && editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playPlace(selectedTool);
-  } else if (selectedTool === 'prism' || selectedTool === 'miniprism' || selectedTool === 'plutonium') {
+  if (BLOCK_TOOLS.includes(S.selectedTool)) {
+    if (hit.y === S.editY && editorPlaceBlock(hit.x, hit.y, hit.z, S.selectedTool)) audio.playPlace(S.selectedTool);
+  } else if (S.selectedTool === 'prism' || S.selectedTool === 'miniprism' || S.selectedTool === 'plutonium') {
     const c = snapItemCell(hit);
-    if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playPlace(selectedTool);
-  } else if (selectedTool === 'enemy') {
+    if (editorPlacePrism(c.x, c.y, c.z, S.selectedTool)) audio.playPlace(S.selectedTool);
+  } else if (S.selectedTool === 'enemy') {
     const c = snapItemCell(hit);
     if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playPlace('enemy');
-  } else if (selectedTool === 'start') {
+  } else if (S.selectedTool === 'start') {
     editorSetStart(snapItemCell(hit));
-  } else if (selectedTool === 'exit') {
+  } else if (S.selectedTool === 'exit') {
     const c = snapItemCell(hit);
-    activeLevel.exit = { x: c.x, y: c.y, z: c.z };
-    buildLevel3D(activeLevel);
+    S.activeLevel.exit = { x: c.x, y: c.y, z: c.z };
+    buildLevel3D(S.activeLevel);
     audio.playPlace('exit');
   }
   drawEditorWires();
@@ -3334,34 +2270,34 @@ function handleEditorDragClick(e) {
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(mouse, camera);
 
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(editY - 0.5));
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(S.editY - 0.5));
   const intersectPoint = new THREE.Vector3();
   if (raycaster.ray.intersectPlane(plane, intersectPoint)) {
     const gx = Math.round(intersectPoint.x);
-    const gy = Math.round(editY);
+    const gy = Math.round(S.editY);
     const gz = Math.round(intersectPoint.z);
     const key = `${gx},${gy},${gz}`;
 
-    if (selectedTool === 'eraser') {
+    if (S.selectedTool === 'eraser') {
       if (editorEraseKey(key)) audio.playBreak();
-    } else if (BLOCK_TOOLS.includes(selectedTool)) {
-      if (editorPlaceBlock(gx, gy, gz, selectedTool)) audio.playPlace(selectedTool);
-    } else if (selectedTool === 'prism' || selectedTool === 'miniprism' || selectedTool === 'plutonium') {
+    } else if (BLOCK_TOOLS.includes(S.selectedTool)) {
+      if (editorPlaceBlock(gx, gy, gz, S.selectedTool)) audio.playPlace(S.selectedTool);
+    } else if (S.selectedTool === 'prism' || S.selectedTool === 'miniprism' || S.selectedTool === 'plutonium') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
-      if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playPlace(selectedTool);
-    } else if (selectedTool === 'enemy') {
+      if (editorPlacePrism(c.x, c.y, c.z, S.selectedTool)) audio.playPlace(S.selectedTool);
+    } else if (S.selectedTool === 'enemy') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
       if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playPlace('enemy');
-    } else if (selectedTool === 'start') {
+    } else if (S.selectedTool === 'start') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
-      if (activeLevel.start.x !== c.x || activeLevel.start.y !== c.y || activeLevel.start.z !== c.z) {
+      if (S.activeLevel.start.x !== c.x || S.activeLevel.start.y !== c.y || S.activeLevel.start.z !== c.z) {
         editorSetStart(c);
       }
-    } else if (selectedTool === 'exit') {
+    } else if (S.selectedTool === 'exit') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
-      if (activeLevel.exit.x !== c.x || activeLevel.exit.y !== c.y || activeLevel.exit.z !== c.z) {
-        activeLevel.exit = { x: c.x, y: c.y, z: c.z };
-        buildLevel3D(activeLevel);
+      if (S.activeLevel.exit.x !== c.x || S.activeLevel.exit.y !== c.y || S.activeLevel.exit.z !== c.z) {
+        S.activeLevel.exit = { x: c.x, y: c.y, z: c.z };
+        buildLevel3D(S.activeLevel);
         drawEditorWires();
         audio.playPlace('exit');
       }
@@ -3372,16 +2308,14 @@ function handleEditorDragClick(e) {
 /* ═══════════════════════════════════════════════════════════
    PLAYTEST MODE
    ═══════════════════════════════════════════════════════════ */
-let isPlaytesting = false;
-let savedEditorLevel = null;
 
 function enterPlaytestMode() {
-  isPlaytesting = true;
-  isPainting = false;
-  currentGroupId = null;
+  S.isPlaytesting = true;
+  S.isPainting = false;
+  S.currentGroupId = null;
   setGroupingUI(false);
-  playerLives = MAX_LIVES;
-  savedEditorLevel = serializeLevel(activeLevel); // Save design snapshot
+  S.playerLives = MAX_LIVES;
+  S.savedEditorLevel = serializeLevel(S.activeLevel); // Save design snapshot
 
   document.getElementById('editor-toolbox').style.display = 'none';
   document.getElementById('editor-top-bar').style.display = 'none';
@@ -3392,20 +2326,20 @@ function enterPlaytestMode() {
   document.getElementById('editor-instructions').style.display = 'none';
   document.getElementById('editor-height-ruler').style.display = 'none';
 
-  if (editorGridHelper) editorGridHelper.visible = false;
-  if (editorGhostBlock) editorGhostBlock.visible = false;
-  if (editorWiresGroup) editorWiresGroup.visible = false;
+  if (S.editorGridHelper) S.editorGridHelper.visible = false;
+  if (S.editorGhostBlock) S.editorGhostBlock.visible = false;
+  if (S.editorWiresGroup) S.editorWiresGroup.visible = false;
 
   // Build play level
-  buildLevel3D(activeLevel);
+  buildLevel3D(S.activeLevel);
   // Focus playing controls
   document.getElementById('btn-playtest-stop').addEventListener('click', exitPlaytestMode);
   audio.playPlaytestEnter();
 }
 
 function exitPlaytestMode() {
-  isPlaytesting = false;
-  activeLevel = deserializeLevel(savedEditorLevel);
+  S.isPlaytesting = false;
+  S.activeLevel = deserializeLevel(S.savedEditorLevel);
 
   document.getElementById('editor-toolbox').style.display = 'flex';
   document.getElementById('editor-top-bar').style.display = 'flex';
@@ -3413,7 +2347,7 @@ function exitPlaytestMode() {
     <div style="display:flex; align-items:center; gap:12px;">
       <span>EDITING HEIGHT (Y):</span>
       <button id="btn-height-down" class="height-btn">▼</button>
-      <span id="height-display" style="font-size:16px; font-weight:bold; color:var(--accent2); width:20px; text-align:center;">${editY}</span>
+      <span id="height-display" style="font-size:16px; font-weight:bold; color:var(--accent2); width:20px; text-align:center;">${S.editY}</span>
       <button id="btn-height-up" class="height-btn">▲</button>
       <span style="opacity:0.5; font-size:11px; margin-left:10px;">(Scroll to change)</span>
     </div>
@@ -3425,9 +2359,9 @@ function exitPlaytestMode() {
   document.getElementById('editor-instructions').style.display = 'flex';
   document.getElementById('editor-height-ruler').style.display = 'flex';
 
-  if (editorGridHelper) editorGridHelper.visible = true;
-  if (editorGhostBlock) editorGhostBlock.visible = true;
-  if (editorWiresGroup) editorWiresGroup.visible = true;
+  if (S.editorGridHelper) S.editorGridHelper.visible = true;
+  if (S.editorGhostBlock) S.editorGhostBlock.visible = true;
+  if (S.editorWiresGroup) S.editorWiresGroup.visible = true;
 
   // Bind new element buttons
   document.getElementById('btn-height-down').addEventListener('click', () => adjustEditHeight(-1));
@@ -3435,20 +2369,20 @@ function exitPlaytestMode() {
   document.getElementById('btn-playtest').addEventListener('click', enterPlaytestMode);
   document.getElementById('btn-editor-exit').addEventListener('click', exitEditMode);
 
-  buildLevel3D(activeLevel);
+  buildLevel3D(S.activeLevel);
   drawEditorWires();
   audio.playPlaytestExit();
 }
 
 function adjustEditHeight(val) {
-  const oldY = editY;
-  editY = Math.max(rulerMinY, Math.min(rulerMaxY, editY + val));
-  if (editY !== oldY) {
+  const oldY = S.editY;
+  S.editY = Math.max(rulerMinY, Math.min(rulerMaxY, S.editY + val));
+  if (S.editY !== oldY) {
     audio.playHeightChange(val > 0);
   }
-  document.getElementById('height-display').textContent = editY;
-  if (editorGridHelper) editorGridHelper.position.set(0.5, editY - 0.49, 0.5);
-  if (editorGridPlane) editorGridPlane.position.set(0.5, editY - 0.49, 0.5);
+  document.getElementById('height-display').textContent = S.editY;
+  if (S.editorGridHelper) S.editorGridHelper.position.set(0.5, S.editY - 0.49, 0.5);
+  if (S.editorGridPlane) S.editorGridPlane.position.set(0.5, S.editY - 0.49, 0.5);
   renderVerticalRuler();
   updateEditorSlicing();
 }
@@ -3478,12 +2412,12 @@ async function loadLevelManifest() {
 }
 
 function loadPreMadeLevel(idx) {
-  isCustomLevel = false;
-  playerLives = MAX_LIVES;
-  if (!premadeLevels.length) return; // manifest not ready (or no level files)
-  const n = premadeLevels.length;
+  S.isCustomLevel = false;
+  S.playerLives = MAX_LIVES;
+  if (!S.premadeLevels.length) return; // manifest not ready (or no level files)
+  const n = S.premadeLevels.length;
   const i = ((idx % n) + n) % n;
-  const lvl3D = deserializeLevel(premadeLevels[i]);
+  const lvl3D = deserializeLevel(S.premadeLevels[i]);
   buildLevel3D(lvl3D);
 }
 
@@ -3491,10 +2425,10 @@ function loadPreMadeLevel(idx) {
    INPUT CONTROLS
    ═══════════════════════════════════════════════════════════ */
 function handleMove(dirX, dirZ) {
-  if (isLevelComplete || isEditMode && !isPlaytesting) return;
+  if (S.isLevelComplete || S.isEditMode && !S.isPlaytesting) return;
   // Re-decide mid-step: pressing the direction opposite to the current roll
   // aborts it and rolls back to the origin cell.
-  if (isRolling && canReverseRoll() && dirX === -lastMoveDir.x && dirZ === -lastMoveDir.z) {
+  if (S.isRolling && canReverseRoll() && dirX === -S.lastMoveDir.x && dirZ === -S.lastMoveDir.z) {
     reverseCurrentRoll();
     return;
   }
@@ -3504,45 +2438,45 @@ function handleMove(dirX, dirZ) {
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   audio.init();
-  keysPressed[e.code] = true;
+  S.keysPressed[e.code] = true;
 
   // Never hijack keys while typing in inputs (level name, import JSON, …)
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return;
 
   // Help overlay toggles with H from anywhere; while open it swallows other keys.
-  if (e.code === 'KeyH') { setHelpOpen(!isHelpOpen); return; }
-  if (isHelpOpen) { if (e.code === 'Escape') setHelpOpen(false); return; }
+  if (e.code === 'KeyH') { setHelpOpen(!S.isHelpOpen); return; }
+  if (S.isHelpOpen) { if (e.code === 'Escape') setHelpOpen(false); return; }
 
   // X-ray view toggle via KeyT removed at user request to restrict transparency effects to middle click.
 
   // Pause + free-orbit camera toggle (play / playtest only).
   if (e.code === 'KeyP') { e.preventDefault(); togglePause(); return; }
   // While paused, swallow every other key so the frozen game can't be driven.
-  if (isPaused) return;
+  if (S.isPaused) return;
 
   // Place block in front of player at same level (E) or one level up (Q)
   if (e.code === 'KeyE' || e.code === 'KeyQ') {
-    if (!isEditMode || isPlaytesting) {
+    if (!S.isEditMode || S.isPlaytesting) {
       e.preventDefault();
       tryPlaceBlock(e.code === 'KeyQ');
     }
     return;
   }
 
-  if (isBalancing) {
+  if (S.isBalancing) {
     let rollBack = false;
-    if (lastMoveDir.x === 1 && (e.code === 'ArrowLeft' || e.code === 'KeyA')) rollBack = true;
-    if (lastMoveDir.x === -1 && (e.code === 'ArrowRight' || e.code === 'KeyD')) rollBack = true;
-    if (lastMoveDir.z === 1 && (e.code === 'ArrowUp' || e.code === 'KeyW')) rollBack = true;
-    if (lastMoveDir.z === -1 && (e.code === 'ArrowDown' || e.code === 'KeyS')) rollBack = true;
+    if (S.lastMoveDir.x === 1 && (e.code === 'ArrowLeft' || e.code === 'KeyA')) rollBack = true;
+    if (S.lastMoveDir.x === -1 && (e.code === 'ArrowRight' || e.code === 'KeyD')) rollBack = true;
+    if (S.lastMoveDir.z === 1 && (e.code === 'ArrowUp' || e.code === 'KeyW')) rollBack = true;
+    if (S.lastMoveDir.z === -1 && (e.code === 'ArrowDown' || e.code === 'KeyS')) rollBack = true;
     if (rollBack) {
       executeRollBack();
       return;
     }
   }
 
-  if (isEditMode && !isPlaytesting) {
+  if (S.isEditMode && !S.isPlaytesting) {
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); editorUndo(); return; }
     if (e.code === 'KeyU') { e.preventDefault(); editorUndo(); return; }
     // Tool hotkeys: 1-9 and 0 pick the first ten tools, X = eraser, L = linker
@@ -3559,10 +2493,10 @@ window.addEventListener('keydown', (e) => {
       // Start a new compound object: every block placed while O is held shares
       // this id. Pick max existing group + 1 so it stays unique after load.
       let maxG = 0;
-      activeLevel.blocks.forEach(b => {
+      S.activeLevel.blocks.forEach(b => {
         if (b.properties && typeof b.properties.group === 'number' && b.properties.group > maxG) maxG = b.properties.group;
       });
-      currentGroupId = maxG + 1;
+      S.currentGroupId = maxG + 1;
       audio.init();
       audio.playGroupStart();
       setGroupingUI(true);
@@ -3571,15 +2505,15 @@ window.addEventListener('keydown', (e) => {
       return;
     }
     if (e.code === 'Escape') {
-      if (linkerSourceKey) {
-        linkerSourceKey = null;
+      if (S.linkerSourceKey) {
+        S.linkerSourceKey = null;
         showMessage('LINK CANCELLED', 1);
         audio.playLinkCancel();
       }
       return;
     }
     // Camera pan (WASD/arrows) and rotate (Q/E) are applied continuously in the
-    // render loop from keysPressed, so holding a key keeps moving smoothly.
+    // render loop from S.keysPressed, so holding a key keeps moving smoothly.
     if (e.code === 'KeyR') { e.preventDefault(); adjustEditHeight(1); }
     if (e.code === 'KeyF') { e.preventDefault(); adjustEditHeight(-1); }
     return;
@@ -3588,7 +2522,7 @@ window.addEventListener('keydown', (e) => {
   // Normal gameplay keys
   // Arm held-key auto-repeat for the pressed direction (loop repeats every 300ms).
   const moveMap = { ArrowUp:[0,-1], KeyW:[0,-1], ArrowDown:[0,1], KeyS:[0,1], ArrowLeft:[-1,0], KeyA:[-1,0], ArrowRight:[1,0], KeyD:[1,0] };
-  if (moveMap[e.code]) { repeatMoveCode = e.code; repeatMoveDir = { x: moveMap[e.code][0], z: moveMap[e.code][1] }; moveRepeatTimer = 0; }
+  if (moveMap[e.code]) { S.repeatMoveCode = e.code; S.repeatMoveDir = { x: moveMap[e.code][0], z: moveMap[e.code][1] }; S.moveRepeatTimer = 0; }
   switch (e.code) {
     case 'ArrowUp': case 'KeyW': e.preventDefault(); handleMove(0, -1); break;
     case 'ArrowDown': case 'KeyS': e.preventDefault(); handleMove(0, 1); break;
@@ -3596,7 +2530,7 @@ window.addEventListener('keydown', (e) => {
     case 'ArrowRight': case 'KeyD': e.preventDefault(); handleMove(1, 0); break;
     case 'KeyR': e.preventDefault(); respawnPlayer(); break;
     case 'Space': e.preventDefault();
-      if (isLevelComplete) {
+      if (S.isLevelComplete) {
         advanceCompletedLevel();
       }
       break;
@@ -3604,13 +2538,13 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('keyup', (e) => {
-  keysPressed[e.code] = false;
-  if (e.code === 'KeyV' && isDrawingPlane) {
+  S.keysPressed[e.code] = false;
+  if (e.code === 'KeyV' && S.isDrawingPlane) {
     commitPlaneDraw();
   }
-  if (e.code === 'KeyO' && currentGroupId !== null) {
-    const n = groupMemberCount(currentGroupId);
-    currentGroupId = null;
+  if (e.code === 'KeyO' && S.currentGroupId !== null) {
+    const n = groupMemberCount(S.currentGroupId);
+    S.currentGroupId = null;
     setGroupingUI(false);
     audio.playGroupEnd();
     if (n > 0) showMessage(`OBJECT GROUPED — ${n} BLOCK${n === 1 ? '' : 'S'}`, 1.5);
@@ -3632,174 +2566,174 @@ document.querySelectorAll('.ctrl-btn').forEach(btn => {
    MOUSE DRAGGING & RAYCAST IN EDITOR
    ═══════════════════════════════════════════════════════════ */
 renderer.domElement.addEventListener('mousedown', (e) => {
-  if (!isEditMode || isPlaytesting) return;
+  if (!S.isEditMode || S.isPlaytesting) return;
   if (e.button === 0) {
-    if (keysPressed['KeyV'] && (BLOCK_TOOLS.includes(selectedTool) || selectedTool === 'eraser')) {
+    if (S.keysPressed['KeyV'] && (BLOCK_TOOLS.includes(S.selectedTool) || S.selectedTool === 'eraser')) {
       const hit = editorRaycast(e);
       if (hit) {
-        planeStartPos = { x: hit.x, y: editY, z: hit.z };
-        planeEndPos = { x: hit.x, y: editY, z: hit.z };
-        isDrawingPlane = true;
+        S.planeStartPos = { x: hit.x, y: S.editY, z: hit.z };
+        S.planeEndPos = { x: hit.x, y: S.editY, z: hit.z };
+        S.isDrawingPlane = true;
       }
       return;
     }
 
     // Snapshot once per click / paint-stroke (skip pure linker source-select).
-    if (!(selectedTool === 'linker' && linkerSourceKey === null)) pushUndoSnapshot();
+    if (!(S.selectedTool === 'linker' && S.linkerSourceKey === null)) pushUndoSnapshot();
     // Left click edit block
-    if (selectedTool !== 'linker' && !keysPressed['KeyV']) {
-      isPainting = true;
+    if (S.selectedTool !== 'linker' && !S.keysPressed['KeyV']) {
+      S.isPainting = true;
     }
     handleEditorClick(e);
   } else {
     // Right click rotate camera / erase
-    isDraggingCamera = true;
-    rightDragMoved = false;
-    dragStartMouse = { x: e.clientX, y: e.clientY };
+    S.isDraggingCamera = true;
+    S.rightDragMoved = false;
+    S.dragStartMouse = { x: e.clientX, y: e.clientY };
   }
 });
 
 renderer.domElement.addEventListener('mousemove', (e) => {
-  if (!isEditMode || isPlaytesting) return;
+  if (!S.isEditMode || S.isPlaytesting) return;
 
-  if (isDraggingCamera) {
-    const dx = e.clientX - dragStartMouse.x;
-    const dy = e.clientY - dragStartMouse.y;
-    if (Math.abs(dx) + Math.abs(dy) > 2) rightDragMoved = true;
-    editorCameraYaw -= dx * 0.005;
-    editorCameraPitch = Math.max(0.1, Math.min(Math.PI/2 - 0.1, editorCameraPitch + dy * 0.005));
-    dragStartMouse = { x: e.clientX, y: e.clientY };
+  if (S.isDraggingCamera) {
+    const dx = e.clientX - S.dragStartMouse.x;
+    const dy = e.clientY - S.dragStartMouse.y;
+    if (Math.abs(dx) + Math.abs(dy) > 2) S.rightDragMoved = true;
+    S.editorCameraYaw -= dx * 0.005;
+    S.editorCameraPitch = Math.max(0.1, Math.min(Math.PI/2 - 0.1, S.editorCameraPitch + dy * 0.005));
+    S.dragStartMouse = { x: e.clientX, y: e.clientY };
   } else {
     // Update Ghost Block Position
     const hit = editorRaycast(e);
     const tooltip = document.getElementById('editor-tooltip');
     
-    if (isDrawingPlane) {
-      if (editorGhostBlock) editorGhostBlock.visible = false;
+    if (S.isDrawingPlane) {
+      if (S.editorGhostBlock) S.editorGhostBlock.visible = false;
       if (tooltip) tooltip.style.display = 'none';
 
       if (hit) {
-        planeEndPos = { x: hit.x, y: editY, z: hit.z };
-        const minX = Math.min(planeStartPos.x, planeEndPos.x);
-        const maxX = Math.max(planeStartPos.x, planeEndPos.x);
-        const minZ = Math.min(planeStartPos.z, planeEndPos.z);
-        const maxZ = Math.max(planeStartPos.z, planeEndPos.z);
+        S.planeEndPos = { x: hit.x, y: S.editY, z: hit.z };
+        const minX = Math.min(S.planeStartPos.x, S.planeEndPos.x);
+        const maxX = Math.max(S.planeStartPos.x, S.planeEndPos.x);
+        const minZ = Math.min(S.planeStartPos.z, S.planeEndPos.z);
+        const maxZ = Math.max(S.planeStartPos.z, S.planeEndPos.z);
         
         const width = (maxX - minX) + 1;
         const length = (maxZ - minZ) + 1;
         const centerX = (minX + maxX) / 2;
         const centerZ = (minZ + maxZ) / 2;
         
-        if (editorPlanePreview) {
-          editorPlanePreview.position.set(centerX, editY, centerZ);
-          editorPlanePreview.scale.set(width, 1.05, length);
-          editorPlanePreview.material.color.setHex(selectedTool === 'eraser' ? 0xff3355 : 0x00ffaa);
-          editorPlanePreview.visible = true;
+        if (S.editorPlanePreview) {
+          S.editorPlanePreview.position.set(centerX, S.editY, centerZ);
+          S.editorPlanePreview.scale.set(width, 1.05, length);
+          S.editorPlanePreview.material.color.setHex(S.selectedTool === 'eraser' ? 0xff3355 : 0x00ffaa);
+          S.editorPlanePreview.visible = true;
         }
       }
     } else {
-      if (editorPlanePreview) editorPlanePreview.visible = false;
-      if (hit && editorGhostBlock) {
+      if (S.editorPlanePreview) S.editorPlanePreview.visible = false;
+      if (hit && S.editorGhostBlock) {
         // Block-placement preview is only shown on the currently selected level.
-        let ghostVisible = !(BLOCK_TOOLS.includes(selectedTool) && hit.y !== editY);
+        let ghostVisible = !(BLOCK_TOOLS.includes(S.selectedTool) && hit.y !== S.editY);
         // Set ghost block color, geometry and position dynamically based on tool
-        if (selectedTool === 'eraser') {
-          editorGhostBlock.material.color.setHex(0xff3355);
-          editorGhostBlock.scale.set(1, 1, 1);
+        if (S.selectedTool === 'eraser') {
+          S.editorGhostBlock.material.color.setHex(0xff3355);
+          S.editorGhostBlock.scale.set(1, 1, 1);
           if (hit.hitType === 'bridge') {
-            editorGhostBlock.geometry = geoThinTile;
-            editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
+            S.editorGhostBlock.geometry = geoThinTile;
+            S.editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
           } else if (hit.hitType === 'container') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.scale.set(0.8, 0.8, 0.8);
-            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.scale.set(0.8, 0.8, 0.8);
+            S.editorGhostBlock.position.set(hit.x, hit.y, hit.z);
           } else if (hit.hitType === 'plutonium') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.scale.set(0.4, 0.4, 0.4);
-            editorGhostBlock.position.set(hit.x, hit.y + 1.0, hit.z);
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.scale.set(0.4, 0.4, 0.4);
+            S.editorGhostBlock.position.set(hit.x, hit.y + 1.0, hit.z);
           } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
-            editorGhostBlock.geometry = geoPrism;
-            if (hit.hitType === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
-            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+            S.editorGhostBlock.geometry = geoPrism;
+            if (hit.hitType === 'miniprism') S.editorGhostBlock.scale.set(0.6, 0.6, 0.6);
+            S.editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
           } else if (hit.hitType === 'enemy') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.position.set(hit.x, hit.y + 1, hit.z);
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.position.set(hit.x, hit.y + 1, hit.z);
           } else {
-            editorGhostBlock.geometry = geoTile;
-            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
+            S.editorGhostBlock.geometry = geoTile;
+            S.editorGhostBlock.position.set(hit.x, hit.y, hit.z);
           }
-        } else if (selectedTool === 'linker') {
-          editorGhostBlock.material.color.setHex(0xffaa00);
-          editorGhostBlock.scale.set(1, 1, 1);
+        } else if (S.selectedTool === 'linker') {
+          S.editorGhostBlock.material.color.setHex(0xffaa00);
+          S.editorGhostBlock.scale.set(1, 1, 1);
           if (hit.hitType === 'bridge') {
-            editorGhostBlock.geometry = geoThinTile;
-            editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
+            S.editorGhostBlock.geometry = geoThinTile;
+            S.editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
           } else if (hit.hitType === 'container') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.scale.set(0.8, 0.8, 0.8);
-            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.scale.set(0.8, 0.8, 0.8);
+            S.editorGhostBlock.position.set(hit.x, hit.y, hit.z);
           } else if (hit.hitType === 'plutonium') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.scale.set(0.4, 0.4, 0.4);
-            editorGhostBlock.position.set(hit.x, hit.y + 1.0, hit.z);
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.scale.set(0.4, 0.4, 0.4);
+            S.editorGhostBlock.position.set(hit.x, hit.y + 1.0, hit.z);
           } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
-            editorGhostBlock.geometry = geoPrism;
-            if (hit.hitType === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
-            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+            S.editorGhostBlock.geometry = geoPrism;
+            if (hit.hitType === 'miniprism') S.editorGhostBlock.scale.set(0.6, 0.6, 0.6);
+            S.editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
           } else {
-            editorGhostBlock.geometry = geoTile;
-            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
+            S.editorGhostBlock.geometry = geoTile;
+            S.editorGhostBlock.position.set(hit.x, hit.y, hit.z);
           }
         } else {
           let ghostColor = 0x00ffcc;
-          if (selectedTool === 'pushable') ghostColor = 0x8b5a2b;
-          else if (selectedTool === 'pressureplate') ghostColor = 0x3366ff;
-          else if (selectedTool === 'danger') ghostColor = 0xff3333;
-          else if (selectedTool === 'shaker') ghostColor = 0x554444;
-          else if (selectedTool === 'booster') ghostColor = 0xffcc00;
-          else if (selectedTool === 'container') ghostColor = 0xa21caf;
-          else if (selectedTool === 'start') ghostColor = 0xff6600;
-          else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
-          else if (selectedTool === 'enemy') ghostColor = 0xff0066;
-          else if (selectedTool === 'plutonium') ghostColor = 0xd946ef;
+          if (S.selectedTool === 'pushable') ghostColor = 0x8b5a2b;
+          else if (S.selectedTool === 'pressureplate') ghostColor = 0x3366ff;
+          else if (S.selectedTool === 'danger') ghostColor = 0xff3333;
+          else if (S.selectedTool === 'shaker') ghostColor = 0x554444;
+          else if (S.selectedTool === 'booster') ghostColor = 0xffcc00;
+          else if (S.selectedTool === 'container') ghostColor = 0xa21caf;
+          else if (S.selectedTool === 'start') ghostColor = 0xff6600;
+          else if (S.selectedTool === 'exit') ghostColor = 0x00ffaa;
+          else if (S.selectedTool === 'enemy') ghostColor = 0xff0066;
+          else if (S.selectedTool === 'plutonium') ghostColor = 0xd946ef;
           // While grouping (O held), tint the placement preview orange to signal
           // that the next block will join the current compound object.
-          if (currentGroupId !== null && BLOCK_TOOLS.includes(selectedTool)) ghostColor = 0xffbb33;
+          if (S.currentGroupId !== null && BLOCK_TOOLS.includes(S.selectedTool)) ghostColor = 0xffbb33;
 
-          editorGhostBlock.material.color.setHex(ghostColor);
-          editorGhostBlock.scale.set(1, 1, 1);
+          S.editorGhostBlock.material.color.setHex(ghostColor);
+          S.editorGhostBlock.scale.set(1, 1, 1);
           let targetY = hit.y;
-          if (selectedTool === 'bridge') {
-            editorGhostBlock.geometry = geoThinTile;
+          if (S.selectedTool === 'bridge') {
+            S.editorGhostBlock.geometry = geoThinTile;
             targetY = hit.y + 0.4;
-          } else if (selectedTool === 'container') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.scale.set(0.8, 0.8, 0.8);
+          } else if (S.selectedTool === 'container') {
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.scale.set(0.8, 0.8, 0.8);
             targetY = hit.y;
-          } else if (selectedTool === 'plutonium') {
-            editorGhostBlock.geometry = geoCube;
-            editorGhostBlock.scale.set(0.4, 0.4, 0.4);
+          } else if (S.selectedTool === 'plutonium') {
+            S.editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.scale.set(0.4, 0.4, 0.4);
             targetY = hit.y + 1.0;
-          } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
-            editorGhostBlock.geometry = geoPrism;
-            if (selectedTool === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
+          } else if (S.selectedTool === 'prism' || S.selectedTool === 'miniprism') {
+            S.editorGhostBlock.geometry = geoPrism;
+            if (S.selectedTool === 'miniprism') S.editorGhostBlock.scale.set(0.6, 0.6, 0.6);
             targetY = hit.y + 0.55;
-          } else if (selectedTool === 'start' || selectedTool === 'exit' || selectedTool === 'enemy') {
+          } else if (S.selectedTool === 'start' || S.selectedTool === 'exit' || S.selectedTool === 'enemy') {
             // Marker preview floats where the player cube / exit ring appears
-            editorGhostBlock.geometry = geoCube;
+            S.editorGhostBlock.geometry = geoCube;
             targetY = hit.y + 1;
           } else {
-            editorGhostBlock.geometry = geoTile;
+            S.editorGhostBlock.geometry = geoTile;
           }
-          editorGhostBlock.position.set(hit.x, targetY, hit.z);
+          S.editorGhostBlock.position.set(hit.x, targetY, hit.z);
         }
-        editorGhostBlock.visible = ghostVisible;
+        S.editorGhostBlock.visible = ghostVisible;
 
         // Update Tooltip
         if (tooltip && ghostVisible) {
-          let text = `${selectedTool.toUpperCase()}`;
+          let text = `${S.selectedTool.toUpperCase()}`;
           text += ` <span class="tooltip-coord">(${hit.x}, ${hit.y}, ${hit.z})</span>`;
-          if (hit.hitKey && BLOCK_TOOLS.includes(selectedTool)) {
+          if (hit.hitKey && BLOCK_TOOLS.includes(S.selectedTool)) {
             text += ` <span class="tooltip-stacking">Stacking</span>`;
           }
           tooltip.innerHTML = text;
@@ -3809,12 +2743,12 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         } else if (tooltip) {
           tooltip.style.display = 'none';
         }
-      } else if (editorGhostBlock) {
-        editorGhostBlock.visible = false;
+      } else if (S.editorGhostBlock) {
+        S.editorGhostBlock.visible = false;
         if (tooltip) tooltip.style.display = 'none';
       }
 
-      if (isPainting) {
+      if (S.isPainting) {
         handleEditorDragClick(e);
       }
     }
@@ -3822,20 +2756,20 @@ renderer.domElement.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mouseup', (e) => {
-  isDraggingCamera = false;
+  S.isDraggingCamera = false;
   if (e.button === 0) {
-    isPainting = false;
-    if (isDrawingPlane) {
+    S.isPainting = false;
+    if (S.isDrawingPlane) {
       commitPlaneDraw();
     }
   }
 });
 
 renderer.domElement.addEventListener('contextmenu', (e) => {
-  if (!isEditMode) return;
+  if (!S.isEditMode) return;
   e.preventDefault();
   // Erase voxel on right-click TAP only — not after rotating the camera
-  if (isPlaytesting || rightDragMoved) return;
+  if (S.isPlaytesting || S.rightDragMoved) return;
   const hit = editorRaycast(e);
   if (hit && hit.hitKey) {
     if (editorEraseKey(hit.hitKey)) audio.playBreak();
@@ -3843,13 +2777,13 @@ renderer.domElement.addEventListener('contextmenu', (e) => {
 });
 
 window.addEventListener('wheel', (e) => {
-  if (!isEditMode || isPlaytesting) return;
+  if (!S.isEditMode || S.isPlaytesting) return;
   if (e.shiftKey) {
     // Adjust edit height
     adjustEditHeight(e.deltaY < 0 ? 1 : -1);
   } else {
     // Zoom camera
-    editorCameraZoom = Math.max(5, Math.min(45, editorCameraZoom + (e.deltaY * 0.01)));
+    S.editorCameraZoom = Math.max(5, Math.min(45, S.editorCameraZoom + (e.deltaY * 0.01)));
   }
 });
 
@@ -3857,7 +2791,7 @@ window.addEventListener('wheel', (e) => {
    Active during play and playtest (not pure editing, not while paused — the
    editor and the pause orbit own the mouse in those modes). */
 function isGameplayMouseMode() {
-  return (!isEditMode || isPlaytesting) && !isPaused;
+  return (!S.isEditMode || S.isPlaytesting) && !S.isPaused;
 }
 renderer.domElement.addEventListener('mousedown', (e) => {
   if (!isGameplayMouseMode()) return;
@@ -3868,20 +2802,20 @@ renderer.domElement.addEventListener('mousedown', (e) => {
     toggleXray();
   } else if (e.button === 0) {
     // Left button → start a camera peek; released → it swings back (render loop).
-    peekActive = true;
-    peekLast = { x: e.clientX, y: e.clientY };
+    S.peekActive = true;
+    S.peekLast = { x: e.clientX, y: e.clientY };
   }
 });
 window.addEventListener('mousemove', (e) => {
-  if (!peekActive) return;
-  const dx = e.clientX - peekLast.x;
-  const dy = e.clientY - peekLast.y;
-  peekLast = { x: e.clientX, y: e.clientY };
-  peekYaw = THREE.MathUtils.clamp(peekYaw - dx * 0.005, -0.6, 0.6);
-  peekPitch = THREE.MathUtils.clamp(peekPitch + dy * 0.004, -0.30, 0.45);
+  if (!S.peekActive) return;
+  const dx = e.clientX - S.peekLast.x;
+  const dy = e.clientY - S.peekLast.y;
+  S.peekLast = { x: e.clientX, y: e.clientY };
+  S.peekYaw = THREE.MathUtils.clamp(S.peekYaw - dx * 0.005, -0.6, 0.6);
+  S.peekPitch = THREE.MathUtils.clamp(S.peekPitch + dy * 0.004, -0.30, 0.45);
 });
 window.addEventListener('mouseup', (e) => {
-  if (e.button === 0) peekActive = false; // release → ease back to default angle
+  if (e.button === 0) S.peekActive = false; // release → ease back to default angle
 });
 // Suppress the middle-click autoscroll puck during play.
 renderer.domElement.addEventListener('auxclick', (e) => {
@@ -3890,37 +2824,37 @@ renderer.domElement.addEventListener('auxclick', (e) => {
 
 /* ═══ PAUSE FREE-ORBIT INPUT (mouse + touch): drag to rotate, wheel/pinch to zoom ═══ */
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (!isPaused) return;
-  pausePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!S.isPaused) return;
+  S.pausePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!isPaused || !pausePointers.has(e.pointerId)) return;
-  const prev = pausePointers.get(e.pointerId);
-  pausePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pausePointers.size >= 2) {
+  if (!S.isPaused || !S.pausePointers.has(e.pointerId)) return;
+  const prev = S.pausePointers.get(e.pointerId);
+  S.pausePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (S.pausePointers.size >= 2) {
     // Two-finger pinch → zoom
-    const pts = [...pausePointers.values()];
+    const pts = [...S.pausePointers.values()];
     const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-    if (pausePinchDist != null && d > 0) pauseZoom = Math.max(3, Math.min(45, pauseZoom * (pausePinchDist / d)));
-    pausePinchDist = d;
+    if (S.pausePinchDist != null && d > 0) S.pauseZoom = Math.max(3, Math.min(45, S.pauseZoom * (S.pausePinchDist / d)));
+    S.pausePinchDist = d;
   } else {
     // Single pointer → orbit (full 360° yaw, clamped pitch)
-    pauseYaw -= (e.clientX - prev.x) * 0.008;
-    pausePitch = Math.max(0.05, Math.min(1.5, pausePitch + (e.clientY - prev.y) * 0.008));
+    S.pauseYaw -= (e.clientX - prev.x) * 0.008;
+    S.pausePitch = Math.max(0.05, Math.min(1.5, S.pausePitch + (e.clientY - prev.y) * 0.008));
   }
 });
 window.addEventListener('pointerup', (e) => {
-  pausePointers.delete(e.pointerId);
-  if (pausePointers.size < 2) pausePinchDist = null;
+  S.pausePointers.delete(e.pointerId);
+  if (S.pausePointers.size < 2) S.pausePinchDist = null;
 });
 window.addEventListener('pointercancel', (e) => {
-  pausePointers.delete(e.pointerId);
-  if (pausePointers.size < 2) pausePinchDist = null;
+  S.pausePointers.delete(e.pointerId);
+  if (S.pausePointers.size < 2) S.pausePinchDist = null;
 });
 window.addEventListener('wheel', (e) => {
-  if (!isPaused) return;
+  if (!S.isPaused) return;
   e.preventDefault();
-  pauseZoom = Math.max(3, Math.min(45, pauseZoom * (e.deltaY > 0 ? 1.08 : 0.92)));
+  S.pauseZoom = Math.max(3, Math.min(45, S.pauseZoom * (e.deltaY > 0 ? 1.08 : 0.92)));
 }, { passive: false });
 
 /* ═══════════════════════════════════════════════════════════
@@ -3936,15 +2870,15 @@ document.getElementById('btn-play-load').addEventListener('click', () => {
 document.getElementById('btn-editor-toggle').addEventListener('click', () => {
   audio.init();
   audio.playClick();
-  if (isEditMode) exitEditMode(); else enterEditMode();
+  if (S.isEditMode) exitEditMode(); else enterEditMode();
 });
 
 // Toolbox items select
 const toolButtons = Array.from(document.querySelectorAll('.tool-btn'));
 function selectToolByName(name) {
   toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === name));
-  selectedTool = name;
-  linkerSourceKey = null;
+  S.selectedTool = name;
+  S.linkerSourceKey = null;
   audio.playToolSelect();
 }
 toolButtons.forEach((btn, i) => {
@@ -3959,10 +2893,10 @@ document.getElementById('ruler-down').addEventListener('click', () => adjustEdit
 
 document.getElementById('btn-toggle-slice').addEventListener('click', () => {
   audio.init();
-  sliceModeActive = !sliceModeActive;
+  S.sliceModeActive = !S.sliceModeActive;
   audio.playSwitch();
-  document.getElementById('btn-toggle-slice').textContent = sliceModeActive ? 'Slice: ON' : 'Slice: OFF';
-  document.getElementById('btn-toggle-slice').className = `editor-btn ${sliceModeActive ? 'success' : 'danger'}`;
+  document.getElementById('btn-toggle-slice').textContent = S.sliceModeActive ? 'Slice: ON' : 'Slice: OFF';
+  document.getElementById('btn-toggle-slice').className = `editor-btn ${S.sliceModeActive ? 'success' : 'danger'}`;
   updateEditorSlicing();
 });
 
@@ -3975,7 +2909,7 @@ document.getElementById('btn-demo-level').addEventListener('click', () => {
   if (confirm("Load the '★ Element Showcase' demo level? This will overwrite your current design.")) {
     pushUndoSnapshot();
     loadDemoLevel();
-    adjustEditHeight(-editY); // reset editing height to 0
+    adjustEditHeight(-S.editY); // reset editing height to 0
   }
 });
 
@@ -4000,10 +2934,10 @@ document.getElementById('btn-ai-generate').addEventListener('click', () => {
   if (confirm("Generate a complex 3D AI Labyrinth? This will overwrite your current design.")) {
     pushUndoSnapshot();
     const lvl = generateAILabyrinth();
-    activeLevel = lvl;
+    S.activeLevel = lvl;
     document.getElementById('level-name-input').value = lvl.name;
     document.getElementById('world-select').value = lvl.world;
-    adjustEditHeight(-editY); // Reset edit height to 0
+    adjustEditHeight(-S.editY); // Reset edit height to 0
     buildLevel3D(lvl);
     drawEditorWires();
     showMessage('AI LABYRINTH GENERATED');
@@ -4017,10 +2951,10 @@ document.getElementById('btn-ai-architect').addEventListener('click', () => {
   if (confirm(`Generate a difficulty-${difficulty} Architect level? This will overwrite your current design.`)) {
     pushUndoSnapshot();
     const lvl = generateArchitectLevel(difficulty);
-    activeLevel = lvl;
+    S.activeLevel = lvl;
     document.getElementById('level-name-input').value = lvl.name;
     document.getElementById('world-select').value = lvl.world;
-    adjustEditHeight(-editY); // Reset edit height to 0
+    adjustEditHeight(-S.editY); // Reset edit height to 0
     buildLevel3D(lvl);
     drawEditorWires();
     showMessage(`ARCHITECT LEVEL — DIFFICULTY ${difficulty}`);
@@ -4060,10 +2994,10 @@ document.getElementById('btn-ai-pro2-generate').addEventListener('click', () => 
   };
   pushUndoSnapshot();
   const lvl = generateArchitectLevel2(opts);
-  activeLevel = lvl;
+  S.activeLevel = lvl;
   document.getElementById('level-name-input').value = lvl.name;
   document.getElementById('world-select').value = lvl.world;
-  adjustEditHeight(-editY); // reset edit height to 0
+  adjustEditHeight(-S.editY); // reset edit height to 0
   buildLevel3D(lvl);
   drawEditorWires();
   document.getElementById('ai-pro2-modal').style.display = 'none';
@@ -4133,13 +3067,13 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
 
   pushUndoSnapshot();
   const lvl = generateArchitectLevel3(opts);
-  activeLevel = lvl;
+  S.activeLevel = lvl;
   document.getElementById('level-name-input').value = lvl.name;
   document.getElementById('world-select').value = lvl.world;
   if (document.getElementById('level-build-limit-input')) {
     document.getElementById('level-build-limit-input').value = lvl.buildBlocksLimit ?? 10;
   }
-  adjustEditHeight(-editY); // reset edit height to 0
+  adjustEditHeight(-S.editY); // reset edit height to 0
   buildLevel3D(lvl);
   drawEditorWires();
   document.getElementById('ai-pro3-modal').style.display = 'none';
@@ -4150,11 +3084,11 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
 document.getElementById('btn-clear-grid').addEventListener('click', () => {
   if (confirm("Clear all blocks in this level?")) {
     pushUndoSnapshot();
-    activeLevel.blocks.clear();
-    activeLevel.prisms.clear();
-    activeLevel.links = [];
-    lvlInsertDefaultBlocks(activeLevel);
-    buildLevel3D(activeLevel);
+    S.activeLevel.blocks.clear();
+    S.activeLevel.prisms.clear();
+    S.activeLevel.links = [];
+    lvlInsertDefaultBlocks(S.activeLevel);
+    buildLevel3D(S.activeLevel);
     drawEditorWires();
     audio.playClear();
   }
@@ -4164,15 +3098,15 @@ document.getElementById('btn-save-local').addEventListener('click', () => {
   audio.playClick();
   const name = document.getElementById('level-name-input').value.trim();
   if (!name) return alert("Please specify level name.");
-  activeLevel.name = name;
-  activeLevel.world = parseInt(document.getElementById('world-select').value);
+  S.activeLevel.name = name;
+  S.activeLevel.world = parseInt(document.getElementById('world-select').value);
   if (document.getElementById('level-build-limit-input')) {
-    activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
+    S.activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
   }
 
   let store = {};
   try { store = JSON.parse(localStorage.getItem('goose_levels') || '{}'); } catch(e){}
-  store[name] = serializeLevel(activeLevel);
+  store[name] = serializeLevel(S.activeLevel);
   localStorage.setItem('goose_levels', JSON.stringify(store));
   showMessage('LEVEL SAVED SUCCESSFULLY');
 });
@@ -4197,12 +3131,12 @@ document.getElementById('btn-export-level').addEventListener('click', () => {
   // Persist the name/theme the user typed into the form so the exported JSON
   // (and the download filename) carry the current level name, not a stale one.
   const typedName = document.getElementById('level-name-input').value.trim();
-  if (typedName) activeLevel.name = typedName;
-  activeLevel.world = parseInt(document.getElementById('world-select').value, 10) || 0;
+  if (typedName) S.activeLevel.name = typedName;
+  S.activeLevel.world = parseInt(document.getElementById('world-select').value, 10) || 0;
   if (document.getElementById('level-build-limit-input')) {
-    activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
+    S.activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
   }
-  const data = serializeLevel(activeLevel);
+  const data = serializeLevel(S.activeLevel);
   document.getElementById('modal-title').textContent = 'EXPORT LEVEL';
   document.getElementById('modal-textarea').value = data;
   document.getElementById('modal-textarea').readOnly = true;
@@ -4243,7 +3177,7 @@ document.getElementById('btn-modal-download').addEventListener('click', () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${activeLevel.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
+  a.download = `${S.activeLevel.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -4260,9 +3194,9 @@ document.getElementById('import-file-input').addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (evt) => {
     try {
-      isCustomLevel = true;
+      S.isCustomLevel = true;
       const lvl = deserializeLevel(evt.target.result);
-      activeLevel = lvl;
+      S.activeLevel = lvl;
       document.getElementById('level-name-input').value = lvl.name;
       document.getElementById('world-select').value = lvl.world;
       buildLevel3D(lvl);
@@ -4280,8 +3214,8 @@ document.getElementById('btn-modal-load').addEventListener('click', () => {
   try {
     const jsonStr = document.getElementById('modal-textarea').value;
     const lvl = deserializeLevel(jsonStr);
-    if (isEditMode && !isPlaytesting) pushUndoSnapshot();
-    activeLevel = lvl;
+    if (S.isEditMode && !S.isPlaytesting) pushUndoSnapshot();
+    S.activeLevel = lvl;
     document.getElementById('level-name-input').value = lvl.name;
     document.getElementById('world-select').value = lvl.world;
     buildLevel3D(lvl);
@@ -4294,195 +3228,18 @@ document.getElementById('btn-modal-load').addEventListener('click', () => {
 });
 
 document.getElementById('complete-overlay').addEventListener('click', () => {
-  if (isLevelComplete) {
+  if (S.isLevelComplete) {
     advanceCompletedLevel();
   }
 });
 
-/* ═══════════════════════════════════════════════════════════
-   ENEMY AI & LIVES
-   ═══════════════════════════════════════════════════════════ */
-function getEnemyMoveTargetY(fromX, fromY, fromZ, toX, toZ) {
-  const colBlocks = getBlocksInColumn(toX, toZ);
-  const currentCeiling = getBlocksInColumn(fromX, fromZ).find(b => b.y === fromY + 1);
-  const stepUp   = colBlocks.find(b => b.y === fromY + 1);
-  const sameLevel = colBlocks.find(b => b.y === fromY);
-  const stepDown  = colBlocks.find(b => b.y === fromY - 1);
-
-  if (stepUp && stepUp.type !== 'pushable') {
-    if (!colBlocks.find(b => b.y === fromY + 2) && !currentCeiling) return fromY + 1;
-    return null;
-  }
-  if (sameLevel && sameLevel.type !== 'pushable') {
-    if (!colBlocks.find(b => b.y === fromY + 1)) return fromY;
-    return null;
-  }
-  if (stepDown && stepDown.type !== 'pushable') {
-    if (!colBlocks.find(b => b.y === fromY)) return fromY - 1;
-    return null;
-  }
-  return null; // void – enemy doesn't fall
-}
-
-function enemyBFS(enemy) {
-  const fromX = enemy.grid.x, fromY = enemy.grid.y, fromZ = enemy.grid.z;
-  const toX = playerGridPos.x, toZ = playerGridPos.z;
-  if (fromX === toX && fromZ === toZ) return null;
-
-  const visited = new Set();
-  visited.add(`${fromX},${fromY},${fromZ}`);
-  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
-  const queue = [];
-
-  for (const {dx, dz} of dirs) {
-    const nx = fromX + dx, nz = fromZ + dz;
-    const ny = getEnemyMoveTargetY(fromX, fromY, fromZ, nx, nz);
-    if (ny === null) continue;
-    const key = `${nx},${ny},${nz}`;
-    if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, first: {dx, dz} }); }
-  }
-
-  let guard = 0;
-  while (queue.length > 0 && guard++ < 3000) {
-    const { x, y, z, first } = queue.shift();
-    if (x === toX && z === toZ) return first;
-    for (const {dx, dz} of dirs) {
-      const nx = x + dx, nz = z + dz;
-      const ny = getEnemyMoveTargetY(x, y, z, nx, nz);
-      if (ny === null) continue;
-      const key = `${nx},${ny},${nz}`;
-      if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, first }); }
-    }
-  }
-  return null;
-}
-
-// Most distant reachable cell from the player start (excluding start/exit) —
-// used only as the legacy auto-spawn point for built-in campaign levels.
-function findEnemySpawnKey() {
-  const sx = playerGridPos.x, sy = playerGridPos.y, sz = playerGridPos.z;
-  const visited = new Set();
-  visited.add(`${sx},${sy},${sz}`);
-  const queue = [{ x: sx, y: sy, z: sz, dist: 0 }];
-  const dirs = [{dx:1,dz:0},{dx:-1,dz:0},{dx:0,dz:1},{dx:0,dz:-1}];
-  let best = { x: exitPos.x, y: exitPos.y, z: exitPos.z, dist: 0 };
-
-  while (queue.length > 0) {
-    const { x, y, z, dist } = queue.shift();
-    const isSpecial = (x === exitPos.x && z === exitPos.z) || (x === sx && z === sz);
-    if (!isSpecial && dist > best.dist) best = { x, y, z, dist };
-    for (const {dx, dz} of dirs) {
-      const nx = x + dx, nz = z + dz;
-      const ny = getEnemyMoveTargetY(x, y, z, nx, nz);
-      if (ny === null) continue;
-      const key = `${nx},${ny},${nz}`;
-      if (!visited.has(key)) { visited.add(key); queue.push({ x: nx, y: ny, z: nz, dist: dist + 1 }); }
-    }
-  }
-  return `${best.x},${best.y},${best.z}`;
-}
-
-function checkEnemiesTrappedWin() {
-  if (isLevelComplete) return;
-  // ONLY evaluate if there are active enemies in the level
-  if (enemies.length === 0) return;
-
-  let allTrapped = true;
-  for (const enemy of enemies) {
-    const ex = enemy.grid.x;
-    const ey = enemy.grid.y;
-    const ez = enemy.grid.z;
-
-    // Check neighbors at ey + 1 (since block coordinates are at y+1 relative to the standing level):
-    const neighbors = [
-      { x: ex + 1, y: ey + 1, z: ez },
-      { x: ex - 1, y: ey + 1, z: ez },
-      { x: ex, y: ey + 1, z: ez + 1 },
-      { x: ex, y: ey + 1, z: ez - 1 }
-    ];
-
-    let trappedCount = 0;
-    for (const n of neighbors) {
-      // Find if there is a block at neighbor position and Y level, and it is a crate ('pushable')
-      const block = activeBlocks.get(`${n.x},${n.y},${n.z}`);
-      if (block && block.type === 'pushable') {
-        trappedCount++;
-      }
-    }
-
-    if (trappedCount < 4) {
-      allTrapped = false;
-      break;
-    }
-  }
-
-  if (allTrapped) {
-    completeLevel();
-  }
-}
-
-function startEnemyRoll(enemy, dx, dz) {
-  const toGX = enemy.grid.x + dx, toGZ = enemy.grid.z + dz;
-  const ny = getEnemyMoveTargetY(enemy.grid.x, enemy.grid.y, enemy.grid.z, toGX, toGZ);
-  if (ny === null) return;
-
-  enemy.isRolling = true;
-  enemy.animStartTime = performance.now() / 1000;
-  enemy.animStartPos.copy(enemy.cube.position);
-  enemy.animEndPos.copy(getPlayerWorldPos(toGX, ny, toGZ, false));
-  enemy.animStartQuat.copy(enemy.cube.quaternion);
-
-  const axis = new THREE.Vector3(dz, 0, -dx).normalize();
-  enemy.animDeltaQuat.setFromAxisAngle(axis, Math.PI / 2);
-
-  enemy.grid.x = toGX;
-  enemy.grid.y = ny;
-  enemy.grid.z = toGZ;
-
-  audio.playEnemyRoll();
-}
-
-function loseLife(cause) {
-  if (playerInvincible) return;
-  playerLives--;
-  const isGameOver = playerLives <= 0;
-  if (isGameOver) {
-    playerLives = MAX_LIVES;
-    audio.playGameOver();
-  } else {
-    audio.playDamage();
-  }
-  updateLivesUI();
-  respawnPlayer(); // resets level + shows LEVEL RESTART
-  // Override message and set invincibility AFTER respawn
-  playerInvincible = true;
-  playerInvincibleTimer = PLAYER_INVINCIBLE_DURATION;
-  
-  const msg = cause
-    ? (isGameOver ? `${cause.toUpperCase()}! GAME OVER!` : `${cause.toUpperCase()}! LIFE LOST — ${playerLives} LEFT`)
-    : (isGameOver ? 'GAME OVER!' : `LIFE LOST — ${playerLives} LEFT`);
-  showMessage(msg, isGameOver ? 2.2 : 1.5);
-}
-
-function updateLivesUI() {
-  const el = document.getElementById('lives-display');
-  if (!el) return;
-  let html = '';
-  for (let i = 0; i < MAX_LIVES; i++) {
-    html += `<span class="life-heart${i < playerLives ? ' active' : ''}">♥</span>`;
-  }
-  el.innerHTML = html;
-}
-
-let transparencyUpdateTimer = 0;
-
 function updateDynamicTransparency() {
-  if (isEditMode && !isPlaytesting) {
+  if (S.isEditMode && !S.isPlaytesting) {
     // Reset all opacities in editor mode (rely entirely on slice mode transparency)
-    activeBlocks.forEach(block => {
+    S.activeBlocks.forEach(block => {
       if (block.mesh && !block.playerPlaced) {
         const isInactiveBridge = (block.type === 'bridge' && block.active === false);
-        const isBelow = (sliceModeActive && block.y < editY);
+        const isBelow = (S.sliceModeActive && block.y < S.editY);
         if (isBelow) {
           block.mesh.traverse(m => {
             if (m.isMesh && m.material) {
@@ -4517,7 +3274,7 @@ function updateDynamicTransparency() {
         }
       }
     });
-    movingPlatformsList.forEach(mp => {
+    S.movingPlatformsList.forEach(mp => {
       if (mp.mesh) {
         const mpMat = mp.mesh.material;
         mp.mesh.visible = true;
@@ -4529,13 +3286,13 @@ function updateDynamicTransparency() {
     return;
   }
 
-  if (!playerCube) return;
+  if (!S.playerCube) return;
 
   // X-ray view (toggled with a middle-mouse click): force every block and
   // platform see-through so the whole structure reads at once. Edge outlines,
   // prisms and enemy markers stay opaque, so the level is still legible.
-  if (xrayMode) {
-    activeBlocks.forEach(block => {
+  if (S.xrayMode) {
+    S.activeBlocks.forEach(block => {
       if (!block.mesh) return;
       setMeshOpacity(block.mesh, 0.5, false); // 50% transparency
       block.mesh.traverse(child => {
@@ -4548,7 +3305,7 @@ function updateDynamicTransparency() {
         }
       });
     });
-    movingPlatformsList.forEach(mp => {
+    S.movingPlatformsList.forEach(mp => {
       if (!mp.mesh) return;
       const mpMat = mp.mesh.material;
       mp.mesh.visible = true;
@@ -4558,8 +3315,8 @@ function updateDynamicTransparency() {
     return;
   }
 
-  // If xrayMode is false, make everything solid / opaque.
-  activeBlocks.forEach(block => {
+  // If S.xrayMode is false, make everything solid / opaque.
+  S.activeBlocks.forEach(block => {
     if (!block.mesh) return;
     setMeshOpacity(block.mesh, 1.0, true);
     block.mesh.traverse(child => {
@@ -4572,7 +3329,7 @@ function updateDynamicTransparency() {
       }
     });
   });
-  movingPlatformsList.forEach(mp => {
+  S.movingPlatformsList.forEach(mp => {
     if (!mp.mesh) return;
     const mpMat = mp.mesh.material;
     mp.mesh.visible = true;
@@ -4594,8 +3351,8 @@ function animate(timestamp) {
 
 
   // Dynamic transparency update (throttled for high performance)
-  transparencyUpdateTimer++;
-  if (transparencyUpdateTimer % 6 === 0) {
+  S.transparencyUpdateTimer++;
+  if (S.transparencyUpdateTimer % 6 === 0) {
     updateDynamicTransparency();
   }
 
@@ -4603,12 +3360,12 @@ function animate(timestamp) {
   // the editor). Recentre on the camera so it never clips, and drift it slowly
   // so orbiting the level sweeps the stars across the view for depth.
   if (starfield) {
-    const playing = !(isEditMode && !isPlaytesting);
+    const playing = !(S.isEditMode && !S.isPlaytesting);
     starfield.visible = playing;
     if (playing) {
       starfield.position.copy(camera.position);
-      if (isLevelComplete && completeAnimStartTime > 0) {
-        const elapsed = now - completeAnimStartTime;
+      if (S.isLevelComplete && S.completeAnimStartTime > 0) {
+        const elapsed = now - S.completeAnimStartTime;
         starfield.rotation.y += dt * 0.45;
         starfield.rotation.x += dt * 0.15;
         const blast = 1 + Math.pow(elapsed * 12.0, 2.2);
@@ -4620,9 +3377,9 @@ function animate(timestamp) {
         const pulse = 1 + Math.sin(now * 0.18) * 0.14;
         starfield.scale.setScalar(pulse);
         let isLowPlutonium = false;
-        if (isCarryingPlutonium > 0 && !isPaused) {
-          const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
-          if (plutoniumTimer <= limit * 0.1) {
+        if (S.isCarryingPlutonium > 0 && !S.isPaused) {
+          const limit = S.activeLevel.plutoniumTimeLimit ?? 30.0;
+          if (S.plutoniumTimer <= limit * 0.1) {
             isLowPlutonium = true;
           }
         }
@@ -4637,64 +3394,64 @@ function animate(timestamp) {
   }
 
   // Paused: freeze all game logic, only drive the free-orbit camera and render.
-  if (isPaused && (!isEditMode || isPlaytesting)) {
+  if (S.isPaused && (!S.isEditMode || S.isPlaytesting)) {
     updatePauseOrbitCamera();
     renderer.render(scene, camera);
     return;
   }
 
-  if (!isEditMode || isPlaytesting) {
+  if (!S.isEditMode || S.isPlaytesting) {
     // Game time
-    if (!isLevelComplete) { elapsedTime += dt; gameTimer += dt; }
+    if (!S.isLevelComplete) { S.elapsedTime += dt; S.gameTimer += dt; }
     
-    if (isCarryingPlutonium > 0 && !isLevelComplete && !isPaused) {
-      plutoniumTimer -= dt;
-      if (plutoniumTimer <= 0) {
-        plutoniumTimer = 0;
-        isCarryingPlutonium = 0;
+    if (S.isCarryingPlutonium > 0 && !S.isLevelComplete && !S.isPaused) {
+      S.plutoniumTimer -= dt;
+      if (S.plutoniumTimer <= 0) {
+        S.plutoniumTimer = 0;
+        S.isCarryingPlutonium = 0;
         const phud = document.getElementById('plutonium-hud-bar');
         if (phud) phud.style.display = 'none';
         loseLife('plutonium exploded');
       } else {
-        const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
-        if (plutoniumTimer <= limit * 0.1) {
-          plutoniumWarningSoundTimer -= dt;
-          if (plutoniumWarningSoundTimer <= 0) {
+        const limit = S.activeLevel.plutoniumTimeLimit ?? 30.0;
+        if (S.plutoniumTimer <= limit * 0.1) {
+          S.plutoniumWarningSoundTimer -= dt;
+          if (S.plutoniumWarningSoundTimer <= 0) {
             audio.playPlutoniumWarning();
-            plutoniumWarningSoundTimer = 0.25; // Play alarm beep every 250ms
+            S.plutoniumWarningSoundTimer = 0.25; // Play alarm beep every 250ms
           }
         } else {
-          plutoniumWarningSoundTimer = 0.0;
+          S.plutoniumWarningSoundTimer = 0.0;
         }
 
         const phudFill = document.getElementById('plutonium-hud-fill');
         const phudText = document.getElementById('plutonium-hud-text');
         if (phudFill && phudText) {
-          const pct = Math.max(0, Math.min(100, (plutoniumTimer / limit) * 100));
+          const pct = Math.max(0, Math.min(100, (S.plutoniumTimer / limit) * 100));
           phudFill.style.width = pct + '%';
-          phudText.textContent = `PLUTONIUM: ${plutoniumTimer.toFixed(1)}s`;
+          phudText.textContent = `PLUTONIUM: ${S.plutoniumTimer.toFixed(1)}s`;
         }
       }
     }
 
-    if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) { comboCount = 0; updateComboUI(); } }
+    if (S.comboTimer > 0) { S.comboTimer -= dt; if (S.comboTimer <= 0) { S.comboCount = 0; updateComboUI(); } }
 
     // Edge Balancing update
-    if (isBalancing) {
+    if (S.isBalancing) {
       if (!isLastMoveKeyHeld()) {
-        isBalancing = false;
-        isFalling = true;
-        fallVelY = 0;
-        playerCube.userData.fallTargetY = playerCube.userData.targetLandingY;
+        S.isBalancing = false;
+        S.isFalling = true;
+        S.fallVelY = 0;
+        S.playerCube.userData.fallTargetY = S.playerCube.userData.targetLandingY;
         audio.playBalanceStop();
         audio.playFall();
       } else {
-        balanceTimer -= dt;
-        if (balanceTimer <= 0) {
-          isBalancing = false;
-          isFalling = true;
-          fallVelY = 0;
-          playerCube.userData.fallTargetY = playerCube.userData.targetLandingY;
+        S.balanceTimer -= dt;
+        if (S.balanceTimer <= 0) {
+          S.isBalancing = false;
+          S.isFalling = true;
+          S.fallVelY = 0;
+          S.playerCube.userData.fallTargetY = S.playerCube.userData.targetLandingY;
           audio.playBalanceStop();
           audio.playFall();
         }
@@ -4705,123 +3462,123 @@ function animate(timestamp) {
     updatePressurePlates();
 
     // Mini duration
-    if (isMini && miniTimer > 0) {
-      miniTimer -= dt;
-      document.getElementById('mini-hud-fill').style.width = (miniTimer / 15 * 100) + '%';
-      if (miniTimer <= 0) checkGrowBack();
+    if (S.isMini && S.miniTimer > 0) {
+      S.miniTimer -= dt;
+      document.getElementById('mini-hud-fill').style.width = (S.miniTimer / 15 * 100) + '%';
+      if (S.miniTimer <= 0) checkGrowBack();
     }
 
     // Held-direction auto-repeat: roll one cell every 300ms while a key is held.
-    if (repeatMoveCode && keysPressed[repeatMoveCode] && !isLevelComplete) {
-      moveRepeatTimer += dt * 1000;
-      if (moveRepeatTimer >= MOVE_REPEAT_MS) {
-        moveRepeatTimer -= MOVE_REPEAT_MS;
-        handleMove(repeatMoveDir.x, repeatMoveDir.z);
+    if (S.repeatMoveCode && S.keysPressed[S.repeatMoveCode] && !S.isLevelComplete) {
+      S.moveRepeatTimer += dt * 1000;
+      if (S.moveRepeatTimer >= MOVE_REPEAT_MS) {
+        S.moveRepeatTimer -= MOVE_REPEAT_MS;
+        handleMove(S.repeatMoveDir.x, S.repeatMoveDir.z);
       }
     } else {
-      repeatMoveCode = null;
-      moveRepeatTimer = 0;
+      S.repeatMoveCode = null;
+      S.moveRepeatTimer = 0;
     }
 
     // Platforms update
-    movingPlatformsList.forEach(mp => mp.update(dt));
+    S.movingPlatformsList.forEach(mp => mp.update(dt));
 
     // Player riding a mover — STICKY + RIGID: once aboard, the cube is locked
     // to the mover by a fixed cell offset (cube = mover.position + offset) every
     // frame, so it is transported with the block and never slides across it.
-    const size = isMini ? CUBE_S * 0.5 : CUBE_S;
-    if (isRolling || isFalling || isTeleporting) {
-      ridingPlatform = null;
+    const size = S.isMini ? CUBE_S * 0.5 : CUBE_S;
+    if (S.isRolling || S.isFalling || S.isTeleporting) {
+      S.ridingPlatform = null;
     } else {
-      if (!ridingPlatform) {
-        ridingPlatform = checkRidingPlatform(); // step aboard
-        if (ridingPlatform) {
+      if (!S.ridingPlatform) {
+        S.ridingPlatform = checkRidingPlatform(); // step aboard
+        if (S.ridingPlatform) {
           // Lock onto the cell we boarded (snap horizontal offset to whole cells,
           // keep the standing height). Works for the driver tile and any
           // compound-object passenger cell.
-          ridingOffset.set(
-            Math.round(playerCube.position.x - ridingPlatform.position.x),
+          S.ridingOffset.set(
+            Math.round(S.playerCube.position.x - S.ridingPlatform.position.x),
             0.5 + size / 2,
-            Math.round(playerCube.position.z - ridingPlatform.position.z)
+            Math.round(S.playerCube.position.z - S.ridingPlatform.position.z)
           );
         }
       }
-      if (ridingPlatform && !ridingPlatform.active) ridingPlatform = null;
+      if (S.ridingPlatform && !S.ridingPlatform.active) S.ridingPlatform = null;
     }
 
-    if (ridingPlatform) {
-      const before = playerCube.position.clone();
-      playerCube.position.copy(ridingPlatform.position).add(ridingOffset);
-      cameraTarget.add(playerCube.position.clone().sub(before));
-      playerGridPos.x = Math.round(playerCube.position.x);
-      playerGridPos.y = Math.round(playerCube.position.y - 0.5 - size/2);
-      playerGridPos.z = Math.round(playerCube.position.z);
+    if (S.ridingPlatform) {
+      const before = S.playerCube.position.clone();
+      S.playerCube.position.copy(S.ridingPlatform.position).add(S.ridingOffset);
+      S.cameraTarget.add(S.playerCube.position.clone().sub(before));
+      S.playerGridPos.x = Math.round(S.playerCube.position.x);
+      S.playerGridPos.y = Math.round(S.playerCube.position.y - 0.5 - size/2);
+      S.playerGridPos.z = Math.round(S.playerCube.position.z);
     } else {
       // Otherwise, a mover advancing into the player's cell shoves them along.
       const mpPush = checkPushedByPlatform();
       if (mpPush) {
         const delta = mpPush.position.clone().sub(mpPush.prevPosition);
-        playerCube.position.add(delta);
-        cameraTarget.add(delta);
-        playerGridPos.x = Math.round(playerCube.position.x);
-        playerGridPos.y = Math.round(playerCube.position.y - 0.5 - size/2);
-        playerGridPos.z = Math.round(playerCube.position.z);
+        S.playerCube.position.add(delta);
+        S.cameraTarget.add(delta);
+        S.playerGridPos.x = Math.round(S.playerCube.position.x);
+        S.playerGridPos.y = Math.round(S.playerCube.position.y - 0.5 - size/2);
+        S.playerGridPos.z = Math.round(S.playerCube.position.z);
         // Shoved over a ledge with nothing to stand on → fall.
-        const col = getBlocksInColumn(playerGridPos.x, playerGridPos.z);
-        if (!col.some(b => b.y === playerGridPos.y)) {
-          const landing = col.find(b => b.y < playerGridPos.y);
-          isFalling = true; fallVelY = 0;
-          playerCube.userData.fallTargetY = landing ? landing.y : -10;
+        const col = getBlocksInColumn(S.playerGridPos.x, S.playerGridPos.z);
+        if (!col.some(b => b.y === S.playerGridPos.y)) {
+          const landing = col.find(b => b.y < S.playerGridPos.y);
+          S.isFalling = true; S.fallVelY = 0;
+          S.playerCube.userData.fallTargetY = landing ? landing.y : -10;
           audio.playFall();
         }
       }
     }
 
     // Rolling animation
-    if (isRolling) {
-      const elapsed = now - animStartTime;
-      let dur = isMini ? ROLL_DUR_MINI : ROLL_DUR_NORMAL;
-      if (boosterMovesActive > 0) dur *= 0.5;
+    if (S.isRolling) {
+      const elapsed = now - S.animStartTime;
+      let dur = S.isMini ? ROLL_DUR_MINI : ROLL_DUR_NORMAL;
+      if (S.boosterMovesActive > 0) dur *= 0.5;
       let t = Math.min(elapsed / dur, 1.0);
       t = 1 - Math.pow(1-t, 2.5); // Ease out
 
-      const pos = new THREE.Vector3().lerpVectors(animStartPos, animEndPos, t);
+      const pos = new THREE.Vector3().lerpVectors(S.animStartPos, S.animEndPos, t);
       // Bounce Y curve
       pos.y += CUBE_S * 0.25 * Math.sin(Math.PI*t);
       // Carry the player with the platform for the duration of a platform roll.
-      if (rollCarrier) pos.add(rollCarrier.position).sub(rollCarrierStart);
-      playerCube.position.copy(pos);
+      if (S.rollCarrier) pos.add(S.rollCarrier.position).sub(S.rollCarrierStart);
+      S.playerCube.position.copy(pos);
 
-      const quat = animStartQuat.clone();
-      quat.slerp(new THREE.Quaternion().multiplyQuaternions(animDeltaQuat, animStartQuat), t);
-      playerCube.quaternion.copy(quat);
+      const quat = S.animStartQuat.clone();
+      quat.slerp(new THREE.Quaternion().multiplyQuaternions(S.animDeltaQuat, S.animStartQuat), t);
+      S.playerCube.quaternion.copy(quat);
 
-      // spawn trail particles
-      trailTimer += dt;
-      if (trailTimer > 0.035) { trailTimer = 0; spawnTrailParticle(); }
+      // spawn trail S.particles
+      S.trailTimer += dt;
+      if (S.trailTimer > 0.035) { S.trailTimer = 0; spawnTrailParticle(); }
 
       if (elapsed >= dur) {
-        playerCube.position.copy(animEndPos);
-        if (rollCarrier) {
+        S.playerCube.position.copy(S.animEndPos);
+        if (S.rollCarrier) {
           // Settle at the platform-carried landing and sync the grid cell to it
           // so the riding logic re-boards the correct cell next frame.
-          playerCube.position.add(rollCarrier.position).sub(rollCarrierStart);
-          playerGridPos.x = Math.round(playerCube.position.x);
-          playerGridPos.z = Math.round(playerCube.position.z);
-          rollCarrier = null;
+          S.playerCube.position.add(S.rollCarrier.position).sub(S.rollCarrierStart);
+          S.playerGridPos.x = Math.round(S.playerCube.position.x);
+          S.playerGridPos.z = Math.round(S.playerCube.position.z);
+          S.rollCarrier = null;
         }
-        playerCube.quaternion.copy(new THREE.Quaternion().multiplyQuaternions(animDeltaQuat, animStartQuat));
-        isRolling = false;
-        cameraTarget.copy(playerCube.position);
+        S.playerCube.quaternion.copy(new THREE.Quaternion().multiplyQuaternions(S.animDeltaQuat, S.animStartQuat));
+        S.isRolling = false;
+        S.cameraTarget.copy(S.playerCube.position);
         onRollComplete();
       }
     }
 
     // Falling animation
-    if (isFalling) {
-      fallVelY += 14 * dt; // gravity
-      playerCube.position.y -= fallVelY * dt;
-      const size = isMini ? CUBE_S*0.5 : CUBE_S;
+    if (S.isFalling) {
+      S.fallVelY += 14 * dt; // gravity
+      S.playerCube.position.y -= S.fallVelY * dt;
+      const size = S.isMini ? CUBE_S*0.5 : CUBE_S;
 
       // Re-scan the column beneath the player every frame and land on the
       // highest supporting block actually reached — including one the initial
@@ -4829,35 +3586,35 @@ function animate(timestamp) {
       // platform). Any solid element catches the player: a deeper fall onto a
       // load-bearing block is always a safe landing, never a death. Death is
       // reserved for the genuine void (no block anywhere below).
-      const col = getBlocksInColumn(playerGridPos.x, playerGridPos.z);
+      const col = getBlocksInColumn(S.playerGridPos.x, S.playerGridPos.z);
       let landBlock = null;
       for (const b of col) {                  // sorted highest-first
-        if (b.y >= playerGridPos.y) continue;  // ignore blocks at/above the launch level
-        if (playerCube.position.y <= b.y + 0.5 + size/2) { landBlock = b; break; }
+        if (b.y >= S.playerGridPos.y) continue;  // ignore blocks at/above the launch level
+        if (S.playerCube.position.y <= b.y + 0.5 + size/2) { landBlock = b; break; }
       }
 
       if (landBlock) {
         // Landed on a supporting element
-        playerCube.position.y = landBlock.y + 0.5 + size/2;
-        isFalling = false;
-        playerGridPos.y = landBlock.y;
+        S.playerCube.position.y = landBlock.y + 0.5 + size/2;
+        S.isFalling = false;
+        S.playerGridPos.y = landBlock.y;
         audio.playLand();
         addShake(0.18);
-        spawnLandingParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
+        spawnLandingParticles(S.playerGridPos.x, S.playerGridPos.y, S.playerGridPos.z);
         // Run the landing cell's effects (switch / exit / hazard / ice …) but
         // NOT the fall branch of onRollComplete — the fall is over, so neutralise
         // the action first so the player is free to move again immediately
         // instead of being re-armed into another fall.
-        playerCube.userData.rollAction = 'land';
+        S.playerCube.userData.rollAction = 'land';
         onRollComplete();
-      } else if (playerCube.position.y < -8) {
+      } else if (S.playerCube.position.y < -8) {
         // Nothing beneath at all → the void
         respawnPlayer();
       }
     }
 
     // ─── ENEMIES ─────────────────────────────────────────────
-    for (const en of enemies) {
+    for (const en of S.enemies) {
       // Rainbow color cycle (enhanced 3X)
       en.hue = (en.hue + dt * 1.65) % 1.0;
       en.cube.material.color.setHSL(en.hue, 1.0, 0.52);
@@ -4886,7 +3643,7 @@ function animate(timestamp) {
       }
 
       // Pathfinding movement
-      if (!en.isRolling && !isLevelComplete) {
+      if (!en.isRolling && !S.isLevelComplete) {
         en.moveTimer -= dt;
         if (en.moveTimer <= 0) {
           en.moveTimer = ENEMY_MOVE_INTERVAL;
@@ -4895,61 +3652,61 @@ function animate(timestamp) {
         }
       }
 
-      // Collision with player. loseLife() rebuilds the level (and the enemies
+      // Collision with player. loseLife() rebuilds the level (and the S.enemies
       // array), so stop iterating the now-stale list immediately.
-      if (!playerInvincible && !isLevelComplete && playerCube) {
-        const sameCell = playerGridPos.x === en.grid.x &&
-                         playerGridPos.y === en.grid.y &&
-                         playerGridPos.z === en.grid.z;
-        const touching = playerCube.position.distanceTo(en.cube.position) < CUBE_S * 1.05;
+      if (!S.playerInvincible && !S.isLevelComplete && S.playerCube) {
+        const sameCell = S.playerGridPos.x === en.grid.x &&
+                         S.playerGridPos.y === en.grid.y &&
+                         S.playerGridPos.z === en.grid.z;
+        const touching = S.playerCube.position.distanceTo(en.cube.position) < CUBE_S * 1.05;
         if (sameCell || touching) { loseLife(); break; }
       }
     }
 
     // Player invincibility blink
-    if (playerInvincible && playerCube) {
-      playerInvincibleTimer -= dt;
-      playerCube.visible = Math.floor(playerInvincibleTimer * 9) % 2 === 0;
-      if (playerInvincibleTimer <= 0) {
-        playerInvincible = false;
-        playerCube.visible = true;
+    if (S.playerInvincible && S.playerCube) {
+      S.playerInvincibleTimer -= dt;
+      S.playerCube.visible = Math.floor(S.playerInvincibleTimer * 9) % 2 === 0;
+      if (S.playerInvincibleTimer <= 0) {
+        S.playerInvincible = false;
+        S.playerCube.visible = true;
       }
     }
     checkEnemiesTrappedWin();
     // ─── END ENEMY ───────────────────────────────────────────
 
     // Camera targets follow player
-    if (!isRolling && !isFalling && playerCube) cameraTarget.lerp(playerCube.position, CAM_LERP);
-    else if (playerCube) cameraTarget.lerp(playerCube.position, CAM_LERP*0.6);
+    if (!S.isRolling && !S.isFalling && S.playerCube) S.cameraTarget.lerp(S.playerCube.position, CAM_LERP);
+    else if (S.playerCube) S.cameraTarget.lerp(S.playerCube.position, CAM_LERP*0.6);
 
-    cameraLookAt.lerp(cameraTarget, CAM_LERP*1.2);
+    S.cameraLookAt.lerp(S.cameraTarget, CAM_LERP*1.2);
 
     // Camera shake
-    if (shakeIntensity > 0.001) {
-      cameraShake.set((Math.random()-0.5)*shakeIntensity, (Math.random()-0.5)*shakeIntensity*0.5, 0);
-      shakeIntensity *= 0.85;
-    } else { cameraShake.set(0,0,0); shakeIntensity = 0; }
+    if (S.shakeIntensity > 0.001) {
+      S.cameraShake.set((Math.random()-0.5)*S.shakeIntensity, (Math.random()-0.5)*S.shakeIntensity*0.5, 0);
+      S.shakeIntensity *= 0.85;
+    } else { S.cameraShake.set(0,0,0); S.shakeIntensity = 0; }
 
     // Camera peek: while the left button is held the view is nudged by
-    // peekYaw/peekPitch; once released it eases smoothly back to neutral.
-    if (!peekActive) {
-      peekYaw  += (0 - peekYaw)  * 0.12;
-      peekPitch += (0 - peekPitch) * 0.12;
-      if (Math.abs(peekYaw)  < 1e-3) peekYaw = 0;
-      if (Math.abs(peekPitch) < 1e-3) peekPitch = 0;
+    // S.peekYaw/S.peekPitch; once released it eases smoothly back to neutral.
+    if (!S.peekActive) {
+      S.peekYaw  += (0 - S.peekYaw)  * 0.12;
+      S.peekPitch += (0 - S.peekPitch) * 0.12;
+      if (Math.abs(S.peekYaw)  < 1e-3) S.peekYaw = 0;
+      if (Math.abs(S.peekPitch) < 1e-3) S.peekPitch = 0;
     }
     const offset = new THREE.Vector3(7, 8.5, 8);
-    if (peekYaw !== 0 || peekPitch !== 0) {
-      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), peekYaw); // orbit horizontally
+    if (S.peekYaw !== 0 || S.peekPitch !== 0) {
+      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), S.peekYaw); // orbit horizontally
       const horizAxis = new THREE.Vector3(-offset.z, 0, offset.x).normalize();
-      offset.applyAxisAngle(horizAxis, peekPitch);               // tilt vertically
+      offset.applyAxisAngle(horizAxis, S.peekPitch);               // tilt vertically
     }
-    const desCam = cameraLookAt.clone().add(offset).add(cameraShake);
+    const desCam = S.cameraLookAt.clone().add(offset).add(S.cameraShake);
     camera.position.lerp(desCam, CAM_LERP*0.7);
-    camera.lookAt(cameraLookAt.clone().add(cameraShake));
+    camera.lookAt(S.cameraLookAt.clone().add(S.cameraShake));
 
-    if (playerCube) {
-      underGlow.position.lerp(new THREE.Vector3(playerCube.position.x, playerCube.position.y-0.4, playerCube.position.z), 0.1);
+    if (S.playerCube) {
+      underGlow.position.lerp(new THREE.Vector3(S.playerCube.position.x, S.playerCube.position.y-0.4, S.playerCube.position.z), 0.1);
     }
 
   } else {
@@ -4961,30 +3718,30 @@ function animate(timestamp) {
       const fwd = new THREE.Vector3();
       camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
       const lft = new THREE.Vector3(-fwd.z, 0, fwd.x);
-      if (keysPressed['KeyW'] || keysPressed['ArrowUp'])    editorCameraTarget.addScaledVector(fwd,  panSpeed * dt);
-      if (keysPressed['KeyS'] || keysPressed['ArrowDown'])  editorCameraTarget.addScaledVector(fwd, -panSpeed * dt);
-      if (keysPressed['KeyA'] || keysPressed['ArrowLeft'])  editorCameraTarget.addScaledVector(lft, -panSpeed * dt);
-      if (keysPressed['KeyD'] || keysPressed['ArrowRight']) editorCameraTarget.addScaledVector(lft,  panSpeed * dt);
-      if (keysPressed['KeyQ']) editorCameraYaw -= rotSpeed * dt;
-      if (keysPressed['KeyE']) editorCameraYaw += rotSpeed * dt;
+      if (S.keysPressed['KeyW'] || S.keysPressed['ArrowUp'])    S.editorCameraTarget.addScaledVector(fwd,  panSpeed * dt);
+      if (S.keysPressed['KeyS'] || S.keysPressed['ArrowDown'])  S.editorCameraTarget.addScaledVector(fwd, -panSpeed * dt);
+      if (S.keysPressed['KeyA'] || S.keysPressed['ArrowLeft'])  S.editorCameraTarget.addScaledVector(lft, -panSpeed * dt);
+      if (S.keysPressed['KeyD'] || S.keysPressed['ArrowRight']) S.editorCameraTarget.addScaledVector(lft,  panSpeed * dt);
+      if (S.keysPressed['KeyQ']) S.editorCameraYaw -= rotSpeed * dt;
+      if (S.keysPressed['KeyE']) S.editorCameraYaw += rotSpeed * dt;
     }
 
     // Level Editor camera orbits
     const targetCamPos = new THREE.Vector3(
-      editorCameraTarget.x + Math.sin(editorCameraYaw) * Math.cos(editorCameraPitch) * editorCameraZoom,
-      editorCameraTarget.y + Math.sin(editorCameraPitch) * editorCameraZoom,
-      editorCameraTarget.z + Math.cos(editorCameraYaw) * Math.cos(editorCameraPitch) * editorCameraZoom
+      S.editorCameraTarget.x + Math.sin(S.editorCameraYaw) * Math.cos(S.editorCameraPitch) * S.editorCameraZoom,
+      S.editorCameraTarget.y + Math.sin(S.editorCameraPitch) * S.editorCameraZoom,
+      S.editorCameraTarget.z + Math.cos(S.editorCameraYaw) * Math.cos(S.editorCameraPitch) * S.editorCameraZoom
     );
     camera.position.lerp(targetCamPos, 0.15);
-    camera.lookAt(editorCameraTarget);
+    camera.lookAt(S.editorCameraTarget);
   }
 
-  // Update particles
-  for (let i=particles.length-1; i>=0; i--) {
-    const p = particles[i]; p.userData.age += dt;
+  // Update S.particles
+  for (let i=S.particles.length-1; i>=0; i--) {
+    const p = S.particles[i]; p.userData.age += dt;
     if (p.userData.age >= p.userData.life) {
       effectsGroup.remove(p); if (p.geometry) p.geometry.dispose(); if (p.material) p.material.dispose();
-      particles.splice(i,1); continue;
+      S.particles.splice(i,1); continue;
     }
     const prog = p.userData.age / p.userData.life;
     p.position.addScaledVector(p.userData.vel, dt);
@@ -4999,11 +3756,11 @@ function animate(timestamp) {
   }
 
   // Update trails
-  for (let i=trailParts.length-1; i>=0; i--) {
-    const p = trailParts[i]; p.userData.age += dt;
+  for (let i=S.trailParts.length-1; i>=0; i--) {
+    const p = S.trailParts[i]; p.userData.age += dt;
     if (p.userData.age >= p.userData.life) {
       effectsGroup.remove(p); if (p.geometry) p.geometry.dispose(); if (p.material) p.material.dispose();
-      trailParts.splice(i,1); continue;
+      S.trailParts.splice(i,1); continue;
     }
     p.material.opacity = 0.45 * (1 - p.userData.age/p.userData.life);
     p.scale.setScalar(0.6 + 0.4*(1 - p.userData.age/p.userData.life));
@@ -5039,16 +3796,16 @@ function animate(timestamp) {
   }
 
   // Animate exit ring
-  if (exitRing) {
+  if (S.exitRing) {
     const s = 1 + Math.sin(now*2.5)*0.08;
-    exitRing.scale.lerp(new THREE.Vector3(s,s,s), 0.1);
-    exitRing.rotation.z += 0.012;
-    exitRing.position.y = exitPos.y + 0.5 + Math.sin(now*3)*0.04;
+    S.exitRing.scale.lerp(new THREE.Vector3(s,s,s), 0.1);
+    S.exitRing.rotation.z += 0.012;
+    S.exitRing.position.y = S.exitPos.y + 0.5 + Math.sin(now*3)*0.04;
   }
 
   // Animate container blocks (purple/black blinking every 200ms, rotating, pulsating size)
   const containerBlink = (now % 0.4) < 0.2;
-  for (const mesh of containerMeshes) {
+  for (const mesh of S.containerMeshes) {
     mesh.rotation.y += 0.015;
     mesh.rotation.x = 0;
     mesh.rotation.z = 0;
@@ -5152,7 +3909,7 @@ const HELP_ELEMENTS = [
 })();
 
 function setHelpOpen(open) {
-  isHelpOpen = open;
+  S.isHelpOpen = open;
   document.getElementById('help-overlay')?.classList.toggle('open', open);
 }
 
@@ -5168,49 +3925,49 @@ document.addEventListener('click', (e) => {
 function updateBuildUI() {
   const el = document.getElementById('build-counter');
   if (!el) return;
-  const limit = activeLevel.buildBlocksLimit ?? 10;
-  const remaining = Math.max(0, limit - placedBlocksCount);
+  const limit = S.activeLevel.buildBlocksLimit ?? 10;
+  const remaining = Math.max(0, limit - S.placedBlocksCount);
   el.textContent = `${remaining} block${remaining !== 1 ? 's' : ''}`;
   el.style.color = remaining === 0 ? '#ff3355' : '#aaa';
 }
 
 function tryPlaceBlock(stepUp) {
-  if (isRolling || isFalling || isTeleporting || isLevelComplete) return;
+  if (S.isRolling || S.isFalling || S.isTeleporting || S.isLevelComplete) return;
 
-  const limit = activeLevel.buildBlocksLimit ?? 10;
-  if (placedBlocksCount >= limit) {
+  const limit = S.activeLevel.buildBlocksLimit ?? 10;
+  if (S.placedBlocksCount >= limit) {
     audio.playLinkCancel();
     showMessage('BLOCK LIMIT REACHED!', 1.2);
     return;
   }
 
-  const dx = lastMoveDir.x !== 0 || lastMoveDir.z !== 0 ? lastMoveDir.x : 0;
-  const dz = lastMoveDir.x !== 0 || lastMoveDir.z !== 0 ? lastMoveDir.z : -1;
+  const dx = S.lastMoveDir.x !== 0 || S.lastMoveDir.z !== 0 ? S.lastMoveDir.x : 0;
+  const dz = S.lastMoveDir.x !== 0 || S.lastMoveDir.z !== 0 ? S.lastMoveDir.z : -1;
 
-  const targetX = playerGridPos.x + dx;
-  const targetY = playerGridPos.y + (stepUp ? 1 : 0);
-  const targetZ = playerGridPos.z + dz;
+  const targetX = S.playerGridPos.x + dx;
+  const targetY = S.playerGridPos.y + (stepUp ? 1 : 0);
+  const targetZ = S.playerGridPos.z + dz;
 
   const key = `${targetX},${targetY},${targetZ}`;
 
-  if (activeBlocks.has(key)) {
+  if (S.activeBlocks.has(key)) {
     audio.playLinkCancel();
     showMessage('BLOCKED!', 1.0);
     return;
   }
 
   const block = { x: targetX, y: targetY, z: targetZ, type: 'normal', properties: {}, active: true, broken: false, playerPlaced: true };
-  activeBlocks.set(key, block);
+  S.activeBlocks.set(key, block);
   createBlockMesh(block, key);
 
   spawnEntranceParticles(targetX, targetY, targetZ);
 
-  placedBlocksCount++;
+  S.placedBlocksCount++;
   updateBuildUI();
 
   audio.playSwitch();
 
-  const remaining = limit - placedBlocksCount;
+  const remaining = limit - S.placedBlocksCount;
   showMessage(`BLOCK PLACED! (${remaining} LEFT)`, 1.0);
 }
 
@@ -5218,9 +3975,9 @@ function tryPlaceBlock(stepUp) {
 
 // START — fetch the level manifest, load level 1, then begin the render loop.
 (async () => {
-  premadeLevels = await loadLevelManifest();
-  if (!premadeLevels.length) console.warn('No /level/*.json files found — start the game from a web server.');
+  S.premadeLevels = await loadLevelManifest();
+  if (!S.premadeLevels.length) console.warn('No /level/*.json files found — start the game from a web server.');
   loadPreMadeLevel(0);
   requestAnimationFrame(animate);
-  console.log(`%c🟧 GOOSE — 3D & Level Editor Ready (${premadeLevels.length} levels)`, 'color:#ff6600;font-size:18px;');
+  console.log(`%c🟧 GOOSE — 3D & Level Editor Ready (${S.premadeLevels.length} levels)`, 'color:#ff6600;font-size:18px;');
 })();

@@ -170,7 +170,14 @@ starfield.add(buildStarfield(3600, 24, 62)); // dense, colourful, sparkly dome
 starfield.renderOrder = -1;
 scene.add(starfield);
 
+// Grid cell (gx,gy,gz) → world-space centre of a cube resting on that cell.
+function getPlayerWorldPos(gx, gy, gz, miniState) {
+  const size = miniState ? CUBE_S * 0.5 : CUBE_S;
+  return new THREE.Vector3(gx, gy + 0.5 + size/2, gz);
+}
+
 export {
+  getPlayerWorldPos,
   renderer, scene, camera, underGlow, starfield, starUniforms,
   matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
   matCube, matPrism, matMiniPrism, matPrismGlow, matBridge, matSwitchPillar,
