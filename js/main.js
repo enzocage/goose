@@ -1114,10 +1114,12 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
   lastMoveDir = { x:dirX, z:dirZ };
   updateComboUI();
 
-  // Audio
+  // Audio (suppress normal movement sound if combo triggers)
   const currKey = `${playerGridPos.x},${playerGridPos.y},${playerGridPos.z}`;
   const block = activeBlocks.get(currKey);
-  if (block && block.type === 'ice') audio.playIce(); else audio.playRoll();
+  if (comboCount < 3) {
+    if (block && block.type === 'ice') audio.playIce(); else audio.playRoll();
+  }
 
   // Break fragile block
   const prevBlock = activeBlocks.get(prevKey);
