@@ -1,37 +1,7 @@
 import * as THREE from 'three';
 import { TILE_SIZE, CUBE_S } from './constants.js';
 
-function createContainerTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 128;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  
-  // Base: red
-  ctx.fillStyle = '#ff1111';
-  ctx.fillRect(0, 0, 128, 128);
-  
-  // 5 stripes fit on a cube edge length.
-  // Using 45 degree angle: a line goes from (x, 0) to (x + 128, 128).
-  // The spacing between diagonal stripes is 128 / 2.5 = 51.2
-  // The line width is 128 / 5 = 25.6
-  ctx.strokeStyle = '#ffcc00';
-  ctx.lineWidth = 128 / 5;
-  
-  const spacing = 128 / 2.5;
-  for (let offset = -128; offset < 256; offset += spacing) {
-    ctx.beginPath();
-    ctx.moveTo(offset, 0);
-    ctx.lineTo(offset + 128, 128);
-    ctx.stroke();
-  }
-  
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  return texture;
-}
+
 
 /* ═══ THREE.JS SETUP: renderer, scene, camera, lights, materials, geometries, groups ═══ */
 const container = document.getElementById('canvas-container');
@@ -89,7 +59,37 @@ const matShaker     = new THREE.MeshStandardMaterial({ color:'#554444', roughnes
 const matBooster    = new THREE.MeshStandardMaterial({ color:'#223322', roughness:0.3, metalness:0.2, emissive:'#ffcc00', emissiveIntensity:0.95 });
 const matPlutonium  = new THREE.MeshStandardMaterial({ color:'#110011', roughness:0.25, metalness:0.3, emissive:'#a21caf', emissiveIntensity:1.0 });
 const matPlutoniumGlow = new THREE.MeshStandardMaterial({ color:'#ffffff', roughness:0.1, metalness:0.1, emissive:'#d946ef', emissiveIntensity:2.0 });
-const matContainer   = new THREE.MeshStandardMaterial({ roughness:0.4, metalness:0.2, map: createContainerTexture() });
+const matContainer = new THREE.MeshStandardMaterial({
+  roughness: 0.4,
+  metalness: 0.2
+});
+
+matContainer.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader.replace(
+    '#include <varying_pars_vertex>',
+    `#include <varying_pars_vertex>
+     varying vec3 vLocalPosition;`
+  );
+  shader.vertexShader = shader.vertexShader.replace(
+    '#include <begin_vertex>',
+    `#include <begin_vertex>
+     vLocalPosition = position;`
+  );
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <varying_pars_fragment>',
+    `#include <varying_pars_fragment>
+     varying vec3 vLocalPosition;`
+  );
+  shader.fragmentShader = shader.fragmentShader.replace(
+    '#include <color_fragment>',
+    `#include <color_fragment>
+     float coord = vLocalPosition.x + vLocalPosition.y + vLocalPosition.z;
+     float pattern = sin(coord * 15.70796327); // 5.0 * PI
+     float stripe = smoothstep(-0.015, 0.015, pattern);
+     vec3 stripeColor = mix(vec3(0.07, 0.07, 0.07), vec3(1.0, 0.8, 0.0), stripe);
+     diffuseColor.rgb = stripeColor;`
+  );
+};
 
 
 /* Shared geometries */
