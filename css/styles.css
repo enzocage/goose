@@ -677,7 +677,7 @@
 
   /* Container purple/black blinking animation */
   .container-blink-swatch {
-    animation: containerBlinkAnimation 0.52s steps(2, start) infinite;
+    animation: containerBlinkAnimation 0.4s steps(2, start) infinite;
   }
   @keyframes containerBlinkAnimation {
     0%, 100% { background: #050005; box-shadow: none; }

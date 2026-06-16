@@ -5010,8 +5010,8 @@ function animate(timestamp) {
     exitRing.position.y = exitPos.y + 0.5 + Math.sin(now*3)*0.04;
   }
 
-  // Animate container block blinking (purple/black)
-  const containerBlink = Math.sin(now * 12.0) > 0.0;
+  // Animate container block blinking (purple/black every 200ms)
+  const containerBlink = (now % 0.4) < 0.2;
   if (containerBlink) {
     matContainer.color.setHex(0xa21caf);      // Purple
     matContainer.emissive.setHex(0xd946ef);   // Glowing purple
@@ -5054,7 +5054,7 @@ const HELP_ELEMENTS = [
   { name:'Prism',          swatch:'background:#ffdd44;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);', desc:'Collect them all — usually required to finish a level.' },
   { name:'Mini-Prism',     swatch:'background:#00ccff;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.7);', desc:'Shrinks you for a short time — climb walls and squeeze under bridges.' },
   { name:'Plutonium',      swatch:'background:#a21caf;box-shadow:0 0 8px #a21caf;border:1px solid #d946ef;border-radius:4px;transform:scale(0.8);', desc:'Purple-black pulsating small cube. Starts a countdown timer once collected.' },
-  { name:'Container',      swatch:'animation: containerBlinkAnimation 0.52s steps(2, start) infinite; border:1px solid #a21caf;', desc:'Purple and black blinking container block. Step on it to deposit your Plutonium before the timer runs out.' },
+  { name:'Container',      swatch:'animation: containerBlinkAnimation 0.4s steps(2, start) infinite; border:1px solid #a21caf;', desc:'Purple and black blinking container block. Step on it to deposit your Plutonium before the timer runs out.' },
 ];
 
 (function setupHelp() {
