@@ -3903,6 +3903,19 @@ function updateDynamicTransparency() {
         }
       }
     });
+    movingPlatformsList.forEach(mp => {
+      if (mp.mesh) {
+        const mpy = Math.round(mp.position.y);
+        const isBelow = (sliceModeActive && mpy < editY);
+        if (isBelow) {
+          mp.mesh.visible = false;
+        } else {
+          mp.mesh.visible = true;
+          mp.mesh.material.transparent = false;
+          mp.mesh.material.opacity = 1.0;
+        }
+      }
+    });
     return;
   }
 
@@ -3928,8 +3941,14 @@ function updateDynamicTransparency() {
       meshToBlockMap.set(block.mesh.id, block);
     }
   });
+  movingPlatformsList.forEach(mp => {
+    if (mp.mesh) {
+      candidateMeshes.push(mp.mesh);
+    }
+  });
 
   const obstructingBlocks = new Set();
+  const obstructingPlatforms = new Set();
   const raycaster = new THREE.Raycaster();
   const camPos = camera.position;
 
@@ -3940,28 +3959,41 @@ function updateDynamicTransparency() {
     
     dir.normalize();
     raycaster.set(camPos, dir);
-    raycaster.far = dist - 0.05; // Stop before target to avoid self-intersection
+    raycaster.far = dist; // Raycast exactly to the target to avoid missing close-range obstacles
     
     const intersects = raycaster.intersectObjects(candidateMeshes, true);
     intersects.forEach(hit => {
       let obj = hit.object;
-      while (obj && !meshToBlockMap.has(obj.id)) {
+      let block = null;
+      let platform = null;
+      while (obj) {
+        if (meshToBlockMap.has(obj.id)) {
+          block = meshToBlockMap.get(obj.id);
+          break;
+        }
+        const foundMp = movingPlatformsList.find(mp => mp.mesh === obj);
+        if (foundMp) {
+          platform = foundMp;
+          break;
+        }
         obj = obj.parent;
       }
-      if (obj) {
-        const block = meshToBlockMap.get(obj.id);
-        if (block) {
-          // Only obstruct if the obstructing block is strictly higher than the player's grid height
-          const playerGridY = Math.round(playerCube.position.y);
-          if (block.y > playerGridY) {
-            obstructingBlocks.add(block);
-          }
+      
+      const playerGridY = Math.round(playerCube.position.y);
+      if (block) {
+        if (block.y >= playerGridY) {
+          obstructingBlocks.add(block);
+        }
+      } else if (platform) {
+        const platformGridY = Math.round(platform.position.y);
+        if (platformGridY >= playerGridY) {
+          obstructingPlatforms.add(platform);
         }
       }
     });
   });
 
-  // 3. Apply opacity
+  // 3. Apply opacity to blocks
   activeBlocks.forEach(block => {
     if (block.mesh) {
       const isObstructing = obstructingBlocks.has(block);
@@ -4001,6 +4033,30 @@ function updateDynamicTransparency() {
             });
           }
         });
+      }
+    }
+  });
+
+  // 4. Apply opacity to moving platforms
+  movingPlatformsList.forEach(mp => {
+    if (mp.mesh) {
+      const isObstructing = obstructingPlatforms.has(mp);
+      const mpy = Math.round(mp.position.y);
+      const isBelow = (sliceModeActive && mpy < editY);
+      
+      if (isBelow) {
+        mp.mesh.visible = false;
+      } else {
+        mp.mesh.visible = true;
+        if (isObstructing) {
+          mp.mesh.material.transparent = true;
+          mp.mesh.material.opacity = 0.2;
+          mp.mesh.material.depthWrite = false;
+        } else {
+          mp.mesh.material.transparent = false;
+          mp.mesh.material.opacity = 1.0;
+          mp.mesh.material.depthWrite = true;
+        }
       }
     }
   });
