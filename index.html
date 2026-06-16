@@ -23,9 +23,15 @@
     <div style="display:flex; gap:12px; pointer-events:auto; align-items:center;">
       <div id="score-box">
         <div id="lives-display"></div>
-        <div id="prism-display">
-          <div id="prism-count">0</div>
-          <div id="prism-label">Prisms</div>
+        <div style="display:flex; gap:20px; justify-content:flex-end; align-items:flex-start;">
+          <div id="plutonium-display" style="display:none; flex-direction:column; align-items:flex-end;">
+            <div id="plutonium-count" style="font-size:30px; font-weight:200; color:#d946ef; letter-spacing:-0.02em;">0/0</div>
+            <div id="plutonium-label" style="font-size:10px; letter-spacing:0.2em; text-transform:uppercase; color:var(--text); opacity:0.5;">Plutonium</div>
+          </div>
+          <div id="prism-display">
+            <div id="prism-count">0</div>
+            <div id="prism-label">Prisms</div>
+          </div>
         </div>
         <div id="combo-display">
           <div id="combo-count">x1</div>

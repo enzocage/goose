@@ -348,7 +348,7 @@ function buildLevel3D(level3D) {
   playTypewriterTitle(document.getElementById('level-name'), level3D.name);
   document.getElementById('level-number').textContent = isEditMode ? 'E' : (isCustomLevel ? 'C' : currentLevelIdx + 1);
   placedBlocksCount = 0;
-  updatePrismUI(); updateMoveUI(); updateTimerUI(); updateBuildUI();
+  updatePrismUI(); updatePlutoniumUI(); updateMoveUI(); updateTimerUI(); updateBuildUI();
   if (document.getElementById('level-build-limit-input')) {
     document.getElementById('level-build-limit-input').value = level3D.buildBlocksLimit ?? 10;
   }
@@ -677,11 +677,26 @@ function flashScreen(color) {
 function updatePrismUI() {
   let collect = 0; let total = 0;
   activePrisms.forEach(p => {
-    if (p.type !== 'miniprism') {
+    if (p.type !== 'miniprism' && p.type !== 'plutonium') {
       total++; if (p.collected) collect++;
     }
   });
   document.getElementById('prism-count').textContent = `${collect}/${total}`;
+}
+function updatePlutoniumUI() {
+  let totalPlutonium = 0;
+  activePrisms.forEach(p => {
+    if (p.type === 'plutonium') totalPlutonium++;
+  });
+  const display = document.getElementById('plutonium-display');
+  if (display) {
+    if (totalPlutonium > 0) {
+      display.style.display = 'flex';
+      document.getElementById('plutonium-count').textContent = `${depositedPlutonium}/${totalPlutonium}`;
+    } else {
+      display.style.display = 'none';
+    }
+  }
 }
 function updateMoveUI() { document.getElementById('move-counter').textContent = `${moveCount} move${moveCount!==1?'s':''}`; }
 function updateTimerUI() {
@@ -1298,6 +1313,8 @@ function onRollComplete() {
       audio.playCollect();
       flashScreen('#00ffaa');
       showMessage('PLUTONIUM DEPOSITED IN CONTAINER!', 2.5);
+
+      updatePlutoniumUI();
 
       // New level win condition: immediately win if all plutonium elements are deposited
       let totalPlutonium = 0;
