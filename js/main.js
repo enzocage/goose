@@ -621,6 +621,28 @@ function spawnTeleportParticles(gx, gy, gz) {
   }
 }
 
+function spawnPlutoniumDepositParticles(gx, gy, gz) {
+  const pos = new THREE.Vector3(gx, gy + 0.5, gz);
+  const colors = ['#d946ef', '#a21caf', '#701a75', '#ffffff'];
+  for (let i = 0; i < 35; i++) {
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const mat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 1.0 });
+    const size = 0.03 + Math.random() * 0.05;
+    const p = new THREE.Mesh(new THREE.SphereGeometry(size, 4, 4), mat);
+    p.position.copy(pos);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.5 + Math.random() * 4.5;
+    const vel = new THREE.Vector3(
+      Math.cos(angle) * speed,
+      Math.random() * 6.0 + 3.0,
+      Math.sin(angle) * speed
+    );
+    p.userData = { vel: vel, life: 0.6 + Math.random() * 0.6, age: 0 };
+    effectsGroup.add(p);
+    particles.push(p);
+  }
+}
+
 function spawnLevelCompleteExplosion() {
   const colors = ['#ff0055', '#00ffaa', '#ffaa00', '#00ccff', '#ff00ff', '#ffff00', '#ffffff'];
   const pos = new THREE.Vector3(exitPos.x, exitPos.y + 0.5, exitPos.z);
@@ -1317,6 +1339,7 @@ function onRollComplete() {
       showMessage(`${depositedCount} PLUTONIUM DEPOSITED IN CONTAINER!`, 2.5);
 
       updatePlutoniumUI();
+      spawnPlutoniumDepositParticles(block.x, block.y, block.z);
 
       // New level win condition: immediately win if all plutonium elements are deposited
       let totalPlutonium = 0;
