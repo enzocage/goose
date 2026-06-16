@@ -427,7 +427,7 @@ function createBlockMesh(block, key) {
   else if (type === 'danger') eColor = '#ff3333';
   else if (type === 'shaker') eColor = '#884444';
   else if (type === 'booster') eColor = '#ffdd00';
-  else if (type === 'container') eColor = '#ffcc00';
+  else if (type === 'container') eColor = '#a21caf';
 
   const line = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color:eColor, transparent:false }));
   mesh.add(line);
@@ -3725,7 +3725,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           else if (selectedTool === 'danger') ghostColor = 0xff3333;
           else if (selectedTool === 'shaker') ghostColor = 0x554444;
           else if (selectedTool === 'booster') ghostColor = 0xffcc00;
-          else if (selectedTool === 'container') ghostColor = 0xffaa00;
+          else if (selectedTool === 'container') ghostColor = 0xa21caf;
           else if (selectedTool === 'start') ghostColor = 0xff6600;
           else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
           else if (selectedTool === 'enemy') ghostColor = 0xff0066;
@@ -5010,6 +5010,18 @@ function animate(timestamp) {
     exitRing.position.y = exitPos.y + 0.5 + Math.sin(now*3)*0.04;
   }
 
+  // Animate container block blinking (purple/black)
+  const containerBlink = Math.sin(now * 12.0) > 0.0;
+  if (containerBlink) {
+    matContainer.color.setHex(0xa21caf);      // Purple
+    matContainer.emissive.setHex(0xd946ef);   // Glowing purple
+    matContainer.emissiveIntensity = 1.5;
+  } else {
+    matContainer.color.setHex(0x050005);      // Near black
+    matContainer.emissive.setHex(0x000000);   // Dark
+    matContainer.emissiveIntensity = 0.0;
+  }
+
   updateTimerUI();
   renderer.render(scene, camera);
 }
@@ -5042,7 +5054,7 @@ const HELP_ELEMENTS = [
   { name:'Prism',          swatch:'background:#ffdd44;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);', desc:'Collect them all — usually required to finish a level.' },
   { name:'Mini-Prism',     swatch:'background:#00ccff;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.7);', desc:'Shrinks you for a short time — climb walls and squeeze under bridges.' },
   { name:'Plutonium',      swatch:'background:#a21caf;box-shadow:0 0 8px #a21caf;border:1px solid #d946ef;border-radius:4px;transform:scale(0.8);', desc:'Purple-black pulsating small cube. Starts a countdown timer once collected.' },
-  { name:'Container',      swatch:'background:repeating-linear-gradient(45deg,#ff1111,#ff1111 4px,#ffcc00 4px,#ffcc00 8px);border:1px solid #ff1111;', desc:'Red/yellow striped container block. Step on it to deposit your Plutonium before the timer runs out.' },
+  { name:'Container',      swatch:'animation: containerBlinkAnimation 0.52s steps(2, start) infinite; border:1px solid #a21caf;', desc:'Purple and black blinking container block. Step on it to deposit your Plutonium before the timer runs out.' },
 ];
 
 (function setupHelp() {

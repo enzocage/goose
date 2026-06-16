@@ -60,36 +60,12 @@ const matBooster    = new THREE.MeshStandardMaterial({ color:'#223322', roughnes
 const matPlutonium  = new THREE.MeshStandardMaterial({ color:'#110011', roughness:0.25, metalness:0.3, emissive:'#a21caf', emissiveIntensity:1.0 });
 const matPlutoniumGlow = new THREE.MeshStandardMaterial({ color:'#ffffff', roughness:0.1, metalness:0.1, emissive:'#d946ef', emissiveIntensity:2.0 });
 const matContainer = new THREE.MeshStandardMaterial({
+  color: '#050005',
   roughness: 0.4,
-  metalness: 0.2
+  metalness: 0.2,
+  emissive: '#000000',
+  emissiveIntensity: 0.0
 });
-
-matContainer.onBeforeCompile = (shader) => {
-  shader.vertexShader = shader.vertexShader.replace(
-    '#include <varying_pars_vertex>',
-    `#include <varying_pars_vertex>
-     varying vec3 vLocalPosition;`
-  );
-  shader.vertexShader = shader.vertexShader.replace(
-    '#include <begin_vertex>',
-    `#include <begin_vertex>
-     vLocalPosition = position;`
-  );
-  shader.fragmentShader = shader.fragmentShader.replace(
-    '#include <varying_pars_fragment>',
-    `#include <varying_pars_fragment>
-     varying vec3 vLocalPosition;`
-  );
-  shader.fragmentShader = shader.fragmentShader.replace(
-    '#include <color_fragment>',
-    `#include <color_fragment>
-     float coord = vLocalPosition.x + vLocalPosition.y + vLocalPosition.z;
-     float pattern = sin(coord * 25.13274123); // 8.0 * PI
-     float stripe = smoothstep(-0.015, 0.015, pattern);
-     vec3 stripeColor = mix(vec3(0.07, 0.07, 0.07), vec3(1.0, 0.8, 0.0), stripe);
-     diffuseColor.rgb = stripeColor;`
-  );
-};
 
 
 /* Shared geometries */

@@ -674,3 +674,13 @@
   .help-el-desc { font-size: 12px; line-height: 1.45; color: rgba(224,224,224,0.7); }
   #help-body::-webkit-scrollbar { width: 8px; }
   #help-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+
+  /* Container purple/black blinking animation */
+  .container-blink-swatch {
+    animation: containerBlinkAnimation 0.52s steps(2, start) infinite;
+  }
+  @keyframes containerBlinkAnimation {
+    0%, 100% { background: #050005; box-shadow: none; }
+    50% { background: #d946ef; box-shadow: 0 0 8px #d946ef; }
+  }
+
