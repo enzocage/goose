@@ -55,6 +55,10 @@ const matPressurePlate = new THREE.MeshStandardMaterial({ color:'#2244aa', rough
 const matDanger     = new THREE.MeshStandardMaterial({ color:'#221111', roughness:0.4, metalness:0.1, emissive:'#ff2233', emissiveIntensity:0.8 });
 const matShaker     = new THREE.MeshStandardMaterial({ color:'#554444', roughness:0.9, metalness:0.0, emissive:'#221111', emissiveIntensity:0.15 });
 const matBooster    = new THREE.MeshStandardMaterial({ color:'#223322', roughness:0.3, metalness:0.2, emissive:'#ffcc00', emissiveIntensity:0.95 });
+const matPlutonium  = new THREE.MeshStandardMaterial({ color:'#a21caf', roughness:0.1, metalness:0.3, emissive:'#d946ef', emissiveIntensity:1.5 });
+const matPlutoniumGlow = new THREE.MeshStandardMaterial({ color:'#ffffff', roughness:0.1, metalness:0.1, emissive:'#d946ef', emissiveIntensity:2.0 });
+const matContainer   = new THREE.MeshStandardMaterial({ color:'#111111', roughness:0.4, metalness:0.2, emissive:'#000000', emissiveIntensity:0.0 });
+
 
 /* Shared geometries */
 const geoTile       = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
@@ -163,6 +167,7 @@ export {
   matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
   matCube, matPrism, matMiniPrism, matPrismGlow, matBridge, matSwitchPillar,
   matCrate, matPressurePlate, matDanger, matShaker, matBooster,
+  matPlutonium, matPlutoniumGlow, matContainer,
   geoTile, geoThinTile, geoCube, geoPrism, geoRing, geoPillar, geoTrail,
   worldGroup, tilesGroup, prismsGroup, effectsGroup, bridgeGroup
 };

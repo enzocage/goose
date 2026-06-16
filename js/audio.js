@@ -101,12 +101,11 @@ export class AudioEngine {
 
       // --- PROMINENT & GAMEPLAY-SIGNIFICANT EVENTS ---
       collect: {
-        wave: "pulse",
-        adsr: [0, 4, 8, 4],
-        pitch: { startFreq: 600 },
-        arp: { offsets: [0, 4, 7, 12, 16], speed: 2 }, // Satisfying bright arpeggiating chime
-        pw: { start: 1500, speed: 200 },
-        frames: { len: 16 }
+        wave: "triangle",
+        adsr: [3, 5, 0, 6],
+        pitch: { startFreq: 523.25, slide: 12 }, // Soft, warm chime with gentle upward lift
+        vibrato: { speed: 0.25, depth: 5 },
+        frames: { len: 10 }
       },
       teleport: {
         wave: "triangle+sawtooth",

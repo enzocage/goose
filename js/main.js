@@ -7,6 +7,7 @@ import {
   matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
   matCube, matPrism, matMiniPrism, matPrismGlow, matBridge, matSwitchPillar,
   matCrate, matPressurePlate, matDanger, matShaker, matBooster,
+  matPlutonium, matPlutoniumGlow, matContainer,
   geoTile, geoThinTile, geoCube, geoPrism, geoRing, geoPillar, geoTrail,
   worldGroup, tilesGroup, prismsGroup, effectsGroup, bridgeGroup
 } from './scene.js';
@@ -66,6 +67,7 @@ let repeatMoveDir = { x:0, z:0 };
 let moveRepeatTimer = 0;
 const MOVE_REPEAT_MS = 300;
 let rollStartGridPos = { x:0, y:0, z:0 };
+let rollPreState = null; // snapshot of move/combo bookkeeping so a mid-step reverse can undo it
 let boosterMovesActive = 0;
 let moveCount = 0;
 let placedBlocksCount = 0;
@@ -74,12 +76,23 @@ let comboCount = 0;
 let comboTimer = 0;
 let elapsedTime = 0;
 let miniTimer = 0;
+let isCarryingPlutonium = false;
+let plutoniumTimer = 30.0;
+let depositedPlutonium = 0;
+let containerMeshes = [];
 let fallVelY = 0;
 
 let cameraTarget = new THREE.Vector3(2, 0, 2);
 let cameraLookAt = new THREE.Vector3(2, 0, 2);
 let cameraShake = new THREE.Vector3();
 let shakeIntensity = 0;
+
+// Gameplay "peek": hold left mouse and drag to nudge the view a little; the
+// offsets ease back to the default angle the moment the button is released.
+let peekActive = false;
+let peekLast = { x: 0, y: 0 };
+let peekYaw = 0;    // horizontal nudge (radians), eased back to 0
+let peekPitch = 0;  // vertical nudge (radians), eased back to 0
 
 let animStartTime = 0;
 let animStartPos = new THREE.Vector3();
@@ -99,6 +112,7 @@ const particles = [];
 const trailParts = [];
 let trailTimer = 0;
 let completeAnimStartTime = 0;
+let completeTimeoutId = null;
 
 /* ═══ ENEMY STATE ═══ */
 // Enemies are placed in the editor (Level3D.enemies) and may appear multiple
@@ -136,6 +150,11 @@ let dragStartMouse = { x:0, y:0 };
 let isPainting = false;
 let rightDragMoved = false; // suppress erase-on-release after a camera drag
 
+let isDrawingPlane = false;
+let planeStartPos = null;
+let planeEndPos = null;
+let editorPlanePreview = null;
+
 let linkerSourceKey = null; // Stored switch/tp for linking
 
 // Compound objects: while "O" is held, every block placed is tagged with the
@@ -146,6 +165,11 @@ let currentGroupId = null; // active group id while O is held, else null
 // Editor undo history — serialized level snapshots, newest last (max 250).
 let undoStack = [];
 const UNDO_LIMIT = 250;
+
+// Batch editing state (suppresses expensive slicing/wire draws/rebuilds during loops)
+let batchEditing = false;
+let batchRebuildNeeded = false;
+
 
 /* ═══════════════════════════════════════════════════════════
    CLEAR / BUILD LEVEL
@@ -172,6 +196,7 @@ function clearLevel() {
   rollCarrier = null;
   activeBlocks.clear();
   activePrisms.clear();
+  containerMeshes = [];
   switchMap.clear();
   teleporterMap.clear();
   switchStates.clear();
@@ -194,6 +219,12 @@ function getPlayerWorldPos(gx, gy, gz, miniState) {
 
 function buildLevel3D(level3D) {
   clearLevel();
+  isCarryingPlutonium = false;
+  plutoniumTimer = level3D.plutoniumTimeLimit ?? 30.0;
+  depositedPlutonium = 0;
+  const phud = document.getElementById('plutonium-hud-bar');
+  if (phud) phud.style.display = 'none';
+
   activeLevel = level3D;
   levelSnapshot = serializeLevel(level3D);
   const world = WORLDS[level3D.world];
@@ -325,6 +356,17 @@ function buildLevel3D(level3D) {
   updatePressurePlates();
   updateLivesUI();
   updateEditorSlicing();
+
+  // Apply the see-through (X-ray) pass right now, with up-to-date world matrices,
+  // so it is correct on the very first frame after a (re)build. The pass is
+  // normally throttled (every 6 frames); without this immediate run the first
+  // throttled pass after an R-restart could fire before the renderer refreshed
+  // the freshly-rebuilt meshes' matrices, raycast against stale transforms, find
+  // no occluders, and leave blocks opaque — which is why the effect only kicked
+  // in "ab und zu" after a restart.
+  worldGroup.updateMatrixWorld(true);
+  transparencyUpdateTimer = 0;
+  updateDynamicTransparency();
 }
 
 function createBlockMesh(block, key) {
@@ -345,6 +387,7 @@ function createBlockMesh(block, key) {
   else if (type === 'danger') mat = matDanger;
   else if (type === 'shaker') mat = matShaker;
   else if (type === 'booster') mat = matBooster;
+  else if (type === 'container') mat = matContainer;
 
   const isExit = (x === exitPos.x && y === exitPos.y && z === exitPos.z);
   if (isExit) mat = matTileExit;
@@ -352,12 +395,12 @@ function createBlockMesh(block, key) {
   // Thin bridge visual
   const geo = type === 'bridge' ? geoThinTile : geoTile;
   const matSide = mat.clone();
-  matSide.transparent = true;
+  matSide.transparent = false;
   matSide.opacity = 1.0;
   matSide.depthWrite = true;
 
   const matTop = mat.clone();
-  matTop.transparent = true;
+  matTop.transparent = false;
   matTop.opacity = 1.0;
   matTop.depthWrite = true;
 
@@ -381,14 +424,28 @@ function createBlockMesh(block, key) {
   else if (type === 'danger') eColor = '#ff3333';
   else if (type === 'shaker') eColor = '#884444';
   else if (type === 'booster') eColor = '#ffdd00';
+  else if (type === 'container') eColor = '#ffcc00';
 
-  const line = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color:eColor, transparent:true, opacity:0.35 }));
+  const line = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color:eColor, transparent:false }));
   mesh.add(line);
   if (isInactiveBridge) {
-    setMeshOpacity(mesh, 0.18, false);
+    mesh.traverse(m => {
+      if (m.isMesh && m.material) {
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        mats.forEach(mat => {
+          mat.wireframe = true;
+          mat.transparent = false;
+          mat.opacity = 1.0;
+        });
+      }
+    });
   }
   tilesGroup.add(mesh);
   block.mesh = mesh;
+
+  if (type === 'container') {
+    containerMeshes.push(mesh);
+  }
 
   // Switch pillar
   if (type === 'switch') {
@@ -442,11 +499,17 @@ function createBlockMesh(block, key) {
 function createPrismMesh(key, p) {
   const [px, py, pz] = key.split(',').map(Number);
   const isMiniPrism = p.type === 'miniprism';
-  const mesh = new THREE.Mesh(geoPrism, isMiniPrism ? matMiniPrism.clone() : matPrism.clone());
+  const isPlutonium = p.type === 'plutonium';
+  let mat = matPrism.clone();
+  if (isMiniPrism) mat = matMiniPrism.clone();
+  else if (isPlutonium) mat = matPlutonium.clone();
+
+  const mesh = new THREE.Mesh(geoPrism, mat);
   if (isMiniPrism) mesh.scale.set(0.6, 0.6, 0.6);
+  else if (isPlutonium) mesh.scale.set(0.8, 0.8, 0.8);
   mesh.position.set(px, py + 0.55, pz);
   mesh.castShadow = true;
-  mesh.userData = { key, type: isMiniPrism ? 'miniprism' : 'prism', isMiniPrism, baseY: py + 0.55 };
+  mesh.userData = { key, type: p.type, isMiniPrism, isPlutonium, baseY: py + 0.55 };
   prismsGroup.add(mesh);
   p.mesh = mesh;
 }
@@ -932,6 +995,49 @@ function executeRollBack() {
   playerCube.userData.rollAction = 'roll-back';
 }
 
+// Whether the in-progress step can be aborted and rolled back to its origin
+// cell. Limited to plain ground moves on static terrain so reversing is always
+// safe (no half-pushed crates, no broken fragile origin, no platform drift).
+function canReverseRoll() {
+  if (!isRolling || !playerCube) return false;
+  const action = playerCube.userData.rollAction;
+  if (action !== 'roll' && action !== 'climb' && action !== 'descend') return false;
+  if (rollCarrier) return false;                       // platform-relative rolls
+  if (playerCube.userData.rollPushedCrate) return false;
+  const origin = activeBlocks.get(`${rollStartGridPos.x},${rollStartGridPos.y},${rollStartGridPos.z}`);
+  if (!origin || origin.broken || origin.type === 'fragile') return false; // origin must still hold us
+  return true;
+}
+
+// Abort the current step and roll the cube back to the cell it left, so the
+// player can change their mind while a move is still animating.
+function reverseCurrentRoll() {
+  const origStartQuat = animStartQuat.clone();          // orientation at step start
+  const backWorld = getPlayerWorldPos(rollStartGridPos.x, rollStartGridPos.y, rollStartGridPos.z, isMini);
+
+  animStartTime = performance.now()/1000;
+  animStartPos.copy(playerCube.position);               // from the current mid-roll pose …
+  animEndPos.copy(backWorld);                           // … back to the origin cell
+  const curQuat = playerCube.quaternion.clone();
+  animStartQuat.copy(curQuat);
+  // delta * cur === origStart, so the cube settles at its exact pre-step orientation.
+  animDeltaQuat.copy(origStartQuat).multiply(curQuat.clone().invert());
+  animFromEdge = false;
+  rollCarrier = null;
+
+  // Return to the origin cell and roll back the step's bookkeeping.
+  playerGridPos = { ...rollStartGridPos };
+  if (rollPreState) {
+    moveCount = rollPreState.moveCount;
+    comboCount = rollPreState.comboCount;
+    comboTimer = rollPreState.comboTimer;
+    lastMoveDir = { ...rollPreState.lastMoveDir };
+    updateMoveUI(); updateComboUI();
+  }
+  audio.playRoll();
+  playerCube.userData.rollAction = 'reverse';
+}
+
 function triggerShakerCrumble(block, key) {
   const originalPos = block.mesh.position.clone();
   audio.playShakerShake(); // shaking crack sound
@@ -993,6 +1099,7 @@ function startRoll(dirX, dirZ) {
     if (!pushObstructed && floorUnderCrate) {
       executePush(crate, pushToX, crate.y, pushToZ, dirX, dirZ);
       executeRoll(toGX, playerGridPos.y, toGZ, dirX, dirZ, 'roll');
+      playerCube.userData.rollPushedCrate = true; // can't reverse: the crate already moved
       return;
     }
     // Blocked push: the crate acts like a wall/step (handled below)
@@ -1066,6 +1173,9 @@ function startRoll(dirX, dirZ) {
 function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
   isRolling = true;
   rollStartGridPos = { ...playerGridPos };
+  // Snapshot bookkeeping so a mid-step reversal can cleanly undo this step.
+  rollPreState = { moveCount, comboCount, comboTimer, lastMoveDir: { ...lastMoveDir } };
+  playerCube.userData.rollPushedCrate = false;
   animStartTime = performance.now()/1000;
   animStartPos.copy(playerCube.position);
 
@@ -1100,13 +1210,10 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
 
   moveCount++; updateMoveUI();
 
-  // Combo
+  // Combo (visual scoring only — the extra arpeggio cue was removed)
   const sameDir = (dirX === lastMoveDir.x && dirZ === lastMoveDir.z);
   if (sameDir && comboTimer > 0) {
     comboCount++;
-    if (comboCount >= 3) {
-      audio.playCombo(comboCount);
-    }
   } else {
     comboCount = 1;
   }
@@ -1114,12 +1221,10 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
   lastMoveDir = { x:dirX, z:dirZ };
   updateComboUI();
 
-  // Audio (suppress normal movement sound if combo triggers)
+  // Movement sound on every step.
   const currKey = `${playerGridPos.x},${playerGridPos.y},${playerGridPos.z}`;
   const block = activeBlocks.get(currKey);
-  if (comboCount < 3) {
-    if (block && block.type === 'ice') audio.playIce(); else audio.playRoll();
-  }
+  if (block && block.type === 'ice') audio.playIce(); else audio.playRoll();
 
   // Break fragile block
   const prevBlock = activeBlocks.get(prevKey);
@@ -1140,6 +1245,13 @@ function onRollComplete() {
 
   if (action === 'roll-back') {
     playerCube.quaternion.identity();
+    isRolling = false;
+    return;
+  }
+
+  if (action === 'reverse') {
+    // Back on the origin cell with the pre-step orientation already restored by
+    // the animation's end-snap — nothing further to resolve.
     isRolling = false;
     return;
   }
@@ -1175,6 +1287,16 @@ function onRollComplete() {
   if (block) {
     if (block.type === 'switch') triggerSwitch(key);
     if (block.type === 'teleporter') triggerTeleport(key);
+    
+    if (block.type === 'container' && isCarryingPlutonium) {
+      isCarryingPlutonium = false;
+      depositedPlutonium++;
+      const phud = document.getElementById('plutonium-hud-bar');
+      if (phud) phud.style.display = 'none';
+      audio.playCollect();
+      flashScreen('#00ffaa');
+      showMessage('PLUTONIUM DEPOSITED IN CONTAINER!', 2.5);
+    }
     
     // Danger block death
     if (block.type === 'danger') {
@@ -1240,22 +1362,18 @@ function setMeshOpacity(mesh, opacity, depthWrite, keepTopOpaque = false, baseOp
   if (!mesh || !mesh.material) return;
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   mats.forEach(m => {
+    let nextVisible, nextTransparent, nextOpacity, nextDepthWrite;
     if (opacity === 0.0) {
-      m.visible = false;
-      m.transparent = false;
-      m.opacity = 1.0;
-      m.depthWrite = false;
+      nextVisible = false; nextTransparent = false; nextOpacity = 1.0; nextDepthWrite = false;
     } else if (opacity < 1.0) {
-      m.visible = true;
-      m.transparent = true;
-      m.opacity = opacity;
-      m.depthWrite = depthWrite;
+      nextVisible = true; nextTransparent = true; nextOpacity = opacity; nextDepthWrite = depthWrite;
     } else {
-      m.visible = true;
-      m.transparent = false;
-      m.opacity = 1.0;
-      m.depthWrite = true;
+      nextVisible = true; nextTransparent = false; nextOpacity = 1.0; nextDepthWrite = true;
     }
+    // Toggling .transparent must force a material update or the renderer can keep
+    // drawing the mesh in its old (opaque) pass, so the opacity change is ignored.
+    if (m.transparent !== nextTransparent) m.needsUpdate = true;
+    m.visible = nextVisible; m.transparent = nextTransparent; m.opacity = nextOpacity; m.depthWrite = nextDepthWrite;
   });
 }
 
@@ -1362,17 +1480,32 @@ function checkPrismCollection(gx, gy, gz) {
   if (prism && !prism.collected) {
     prism.collected = true;
     audio.playCollect();
-    flashScreen('#ffcc44');
-    if (prism.mesh) {
-      spawnCollectParticles(prism.mesh.position);
-      const mesh = prism.mesh;
-      prism.mesh.material = matPrismGlow.clone();
-      setTimeout(() => prismsGroup.remove(mesh), 200);
-    }
-    if (prism.type === 'miniprism') {
-      activateMiniCube();
+    if (prism.type === 'plutonium') {
+      flashScreen('#d946ef');
+      if (prism.mesh) {
+        spawnCollectParticles(prism.mesh.position);
+        const mesh = prism.mesh;
+        prism.mesh.material = matPlutoniumGlow.clone();
+        setTimeout(() => prismsGroup.remove(mesh), 200);
+      }
+      isCarryingPlutonium = true;
+      plutoniumTimer = activeLevel.plutoniumTimeLimit ?? 30.0;
+      showMessage('PLUTONIUM COLLECTED! DEPOSIT IN CONTAINER', 3.0);
+      const phud = document.getElementById('plutonium-hud-bar');
+      if (phud) phud.style.display = 'block';
     } else {
-      updatePrismUI();
+      flashScreen('#ffcc44');
+      if (prism.mesh) {
+        spawnCollectParticles(prism.mesh.position);
+        const mesh = prism.mesh;
+        prism.mesh.material = matPrismGlow.clone();
+        setTimeout(() => prismsGroup.remove(mesh), 200);
+      }
+      if (prism.type === 'miniprism') {
+        activateMiniCube();
+      } else {
+        updatePrismUI();
+      }
     }
   }
 }
@@ -1422,11 +1555,31 @@ function checkGrowBack() {
    ═══════════════════════════════════════════════════════════ */
 function checkLevelComplete() {
   let remaining = 0;
+  let totalPlutonium = 0;
   activePrisms.forEach(p => {
-    if (p.type !== 'miniprism' && !p.collected) remaining++;
+    if (p.type === 'plutonium') totalPlutonium++;
+    else if (p.type !== 'miniprism' && !p.collected) remaining++;
   });
   if (remaining === 0) {
+    if (totalPlutonium > 0 && depositedPlutonium < totalPlutonium) {
+      showMessage(`DEPOSIT ALL PLUTONIUM FIRST! (${depositedPlutonium}/${totalPlutonium})`, 2.0);
+      return;
+    }
     completeLevel();
+  }
+}
+
+function advanceCompletedLevel() {
+  if (completeTimeoutId) {
+    clearTimeout(completeTimeoutId);
+    completeTimeoutId = null;
+  }
+  document.getElementById('complete-overlay').classList.remove('show');
+  if (isEditMode) {
+    exitPlaytestMode();
+  } else {
+    currentLevelIdx = (currentLevelIdx + 1) % premadeLevels.length;
+    loadPreMadeLevel(currentLevelIdx);
   }
 }
 
@@ -1464,14 +1617,9 @@ function completeLevel() {
     }, 1350);
   }
 
-  setTimeout(() => {
-    document.getElementById('complete-overlay').classList.remove('show');
-    if (isEditMode) {
-      exitPlaytestMode();
-    } else {
-      currentLevelIdx = (currentLevelIdx + 1) % premadeLevels.length;
-      loadPreMadeLevel(currentLevelIdx);
-    }
+  if (completeTimeoutId) clearTimeout(completeTimeoutId);
+  completeTimeoutId = setTimeout(() => {
+    advanceCompletedLevel();
   }, 2500);
 }
 
@@ -1813,6 +1961,8 @@ function generateArchitectLevel3(opts) {
   // ── New AI Pro3 sections ──
   P.secretRooms  = opts.secretRooms  ? clamp(opts.secretRooms, 1, 8)  : 0;
   P.iceCorridors = opts.iceCorridors ? clamp(opts.iceCorridors, 1, 8) : 0;
+  P.plutonium    = opts.plutonium    ? clamp(opts.plutonium, 1, 10)   : 0;
+  P.plutoniumTime = opts.plutoniumTime ? clamp(opts.plutoniumTime, 5, 180) : 30;
 
   // Collapse/danger tiles live only on optional branch cells. If those are
   // requested but branching is off, carve a few short host spurs for them.
@@ -1824,6 +1974,7 @@ function generateArchitectLevel3(opts) {
   const world = clamp(Math.floor((size - 1) / 2), 0, 4);
   const lvl = buildArchitect(P, `Architect3 · Lvl ${size}`, world);
   lvl.buildBlocksLimit = opts.buildLimit !== undefined ? opts.buildLimit : 10;
+  lvl.plutoniumTimeLimit = P.plutoniumTime;
   return lvl;
 }
 
@@ -2132,6 +2283,30 @@ function buildArchitect(P, name, world) {
     lvl.enemies.set(`${c.x},${c.y},${c.z}`, {});
   }
 
+  // ── 9.5) Plutonium & Container placement (AI Pro3) ──
+  if (P.plutonium && P.plutonium > 0) {
+    const possiblePlutoniumCells = path.filter(c => {
+      const k = `${c.x},${c.y},${c.z}`;
+      return k !== startKey && k !== exitKey && lvl.blocks.get(k).type === 'normal' && !lvl.prisms.has(k);
+    }).sort(() => 0.5 - Math.random());
+
+    const numPlutonium = Math.min(P.plutonium, possiblePlutoniumCells.length);
+    for (let i = 0; i < numPlutonium; i++) {
+      const c = possiblePlutoniumCells[i];
+      lvl.prisms.set(`${c.x},${c.y},${c.z}`, { type: 'plutonium' });
+    }
+
+    const possibleContainerCells = path.filter(c => {
+      const k = `${c.x},${c.y},${c.z}`;
+      return k !== startKey && k !== exitKey && lvl.blocks.get(k).type === 'normal' && !lvl.prisms.has(k);
+    }).sort(() => 0.5 - Math.random());
+
+    if (possibleContainerCells.length > 0) {
+      const c = possibleContainerCells[0];
+      setBlock(c, 'container');
+    }
+  }
+
   // ── 10) Validate solvability; repair as a safety net ──
   // Switch-gate softlock guard: a triggered bridge is only fair if its switch
   // can be reached WITHOUT crossing any (still-closed) triggered bridge. If not,
@@ -2230,6 +2405,14 @@ function enterEditMode() {
   editorGhostBlock = new THREE.Mesh(geoTile, new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true }));
   scene.add(editorGhostBlock);
 
+  // Add Plane Preview (wireframe box helper shown while drawing a rectangular area with V held)
+  editorPlanePreview = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ color: 0x00ffaa, wireframe: true, depthTest: false })
+  );
+  editorPlanePreview.visible = false;
+  scene.add(editorPlanePreview);
+
   editorWiresGroup = new THREE.Group();
   scene.add(editorWiresGroup);
 
@@ -2263,6 +2446,12 @@ function exitEditMode() {
   if (editorGridPlane) { scene.remove(editorGridPlane); editorGridPlane = null; }
   if (editorGhostBlock) { scene.remove(editorGhostBlock); editorGhostBlock = null; }
   if (editorWiresGroup) { scene.remove(editorWiresGroup); editorWiresGroup = null; }
+  if (editorPlanePreview) {
+    scene.remove(editorPlanePreview);
+    editorPlanePreview.geometry.dispose();
+    editorPlanePreview.material.dispose();
+    editorPlanePreview = null;
+  }
 
   // Reset slicing opacities / visibilities
   updateEditorSlicing();
@@ -2300,8 +2489,7 @@ function updateEditorSlicing() {
     activeBlocks.forEach(b => {
       if (b.mesh) {
         b.mesh.visible = true;
-        const baseOpacity = b.type === 'bridge' ? 0.4 : 1.0;
-        setMeshOpacity(b.mesh, baseOpacity, baseOpacity === 1.0, true, baseOpacity);
+        setMeshOpacity(b.mesh, 1.0, true);
       }
       if (b.pillar) b.pillar.visible = true;
     });
@@ -2324,9 +2512,36 @@ function updateEditorSlicing() {
       if (b.pillar) b.pillar.visible = true;
       const isBelow = (sliceModeActive && b.y < editY);
       const isInactiveBridge = (b.type === 'bridge' && b.active === false);
-      if (isBelow || isInactiveBridge) {
-        setMeshOpacity(b.mesh, 0.2, false);
+      if (isBelow) {
+        b.mesh.traverse(m => {
+          if (m.isMesh && m.material) {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            mats.forEach(mat => {
+              mat.wireframe = false;
+            });
+          }
+        });
+        setMeshOpacity(b.mesh, 1.0, true);
+      } else if (isInactiveBridge) {
+        b.mesh.traverse(m => {
+          if (m.isMesh && m.material) {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            mats.forEach(mat => {
+              mat.wireframe = true;
+              mat.transparent = false;
+              mat.opacity = 1.0;
+            });
+          }
+        });
       } else {
+        b.mesh.traverse(m => {
+          if (m.isMesh && m.material) {
+            const mats = Array.isArray(m.material) ? m.material : [m.material];
+            mats.forEach(mat => {
+              mat.wireframe = false;
+            });
+          }
+        });
         setMeshOpacity(b.mesh, 1.0, true);
       }
     }
@@ -2338,9 +2553,8 @@ function updateEditorSlicing() {
       p.mesh.visible = false;
     } else {
       p.mesh.visible = true;
-      const below = (sliceModeActive && py < editY);
-      p.mesh.material.transparent = below;
-      p.mesh.material.opacity = below ? 0.2 : 1.0;
+      p.mesh.material.transparent = false;
+      p.mesh.material.opacity = 1.0;
     }
   });
   enemyMarkers.forEach((m, k) => {
@@ -2349,9 +2563,8 @@ function updateEditorSlicing() {
       m.visible = false;
     } else {
       m.visible = true;
-      const below = (sliceModeActive && ey < editY);
-      m.material.transparent = below;
-      m.material.opacity = below ? 0.2 : 1.0;
+      m.material.transparent = false;
+      m.material.opacity = 1.0;
     }
   });
   movingPlatformsList.forEach(mp => {
@@ -2360,9 +2573,8 @@ function updateEditorSlicing() {
       mp.mesh.visible = false;
     } else {
       mp.mesh.visible = true;
-      const below = (sliceModeActive && mpy < editY);
-      mp.mesh.material.transparent = below;
-      mp.mesh.material.opacity = below ? 0.2 : 1.0;
+      mp.mesh.material.transparent = false;
+      mp.mesh.material.opacity = 1.0;
     }
   });
   applyXrayOverride();
@@ -2379,7 +2591,8 @@ function applyXrayOverride() {
 function toggleXray() {
   xrayMode = !xrayMode;
   audio.playXrayToggle(xrayMode);
-  updateEditorSlicing(); // applies the override, or restores normal opacity when off
+  updateEditorSlicing();        // editor: applies / restores slicing opacity
+  updateDynamicTransparency();  // play: apply (or clear) the see-through pass at once
   showMessage(xrayMode ? 'X-RAY VIEW ON' : 'X-RAY VIEW OFF', 1.2);
 }
 
@@ -2572,7 +2785,7 @@ function drawEditorWires() {
     const centroid = new THREE.Vector3(cx, cy, cz);
     members.forEach(b => {
       const geo = new THREE.BufferGeometry().setFromPoints([centroid, new THREE.Vector3(b.x, b.y + 0.5, b.z)]);
-      const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xffaa00, dashSize: 0.18, gapSize: 0.12, opacity: 0.7, transparent: true }));
+      const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xffaa00, dashSize: 0.18, gapSize: 0.12, opacity: 1.0, transparent: false }));
       line.computeLineDistances();
       editorWiresGroup.add(line);
     });
@@ -2651,7 +2864,7 @@ function editorRaycast(e) {
   return null;
 }
 
-const BLOCK_TOOLS = ['normal', 'fragile', 'ice', 'switch', 'bridge', 'teleporter', 'moving', 'pushable', 'pressureplate', 'danger', 'shaker', 'booster'];
+const BLOCK_TOOLS = ['normal', 'fragile', 'ice', 'switch', 'bridge', 'teleporter', 'moving', 'pushable', 'pressureplate', 'danger', 'shaker', 'booster', 'container'];
 
 function snapItemCell(hit) {
   // Items (start/exit/prisms) must sit on a block cell to be reachable.
@@ -2695,8 +2908,12 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
     if (hasLinks) {
       // Removing a linked block changes trigger wiring — full rebuild
       activeLevel.links = activeLevel.links.filter(l => l.from !== key && l.to !== key && l.k1 !== key && l.k2 !== key);
-      buildLevel3D(activeLevel);
-      drawEditorWires();
+      if (!batchEditing) {
+        buildLevel3D(activeLevel);
+        drawEditorWires();
+      } else {
+        batchRebuildNeeded = true;
+      }
       return true;
     }
     const b = activeBlocks.get(key);
@@ -2714,7 +2931,9 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
       activeBlocks.delete(key);
     }
     removed = true;
-    drawEditorWires();
+    if (!batchEditing) {
+      drawEditorWires();
+    }
   }
   return removed;
 }
@@ -2736,12 +2955,14 @@ function editorPlaceBlock(x, y, z, type) {
   } else {
     createBlockMesh(rb, key);
   }
-  updateEditorSlicing();
-  // While grouping (O held), give live audio + visual feedback per added block.
-  if (currentGroupId !== null) {
-    audio.playGroupAdd(groupMemberCount(currentGroupId));
-    refreshGroupingIndicator();
-    drawEditorWires();
+  if (!batchEditing) {
+    updateEditorSlicing();
+    // While grouping (O held), give live audio + visual feedback per added block.
+    if (currentGroupId !== null) {
+      audio.playGroupAdd(groupMemberCount(currentGroupId));
+      refreshGroupingIndicator();
+      drawEditorWires();
+    }
   }
   return true;
 }
@@ -2778,9 +2999,141 @@ function editorSetStart(c) {
   audio.playPlace('start');
 }
 
+function editorFillPlane(y, type) {
+  batchEditing = true;
+  batchRebuildNeeded = false;
+  let placedAny = false;
+
+  for (let x = -25; x <= 25; x++) {
+    for (let z = -25; z <= 25; z++) {
+      if (editorPlaceBlock(x, y, z, type)) {
+        placedAny = true;
+      }
+    }
+  }
+
+  batchEditing = false;
+  if (batchRebuildNeeded) {
+    buildLevel3D(activeLevel);
+  } else if (placedAny) {
+    updateEditorSlicing();
+  }
+  drawEditorWires();
+}
+
+function editorClearPlane(y) {
+  batchEditing = true;
+  batchRebuildNeeded = false;
+  let erasedAny = false;
+
+  const keysToErase = [];
+  activeLevel.blocks.forEach((b, k) => {
+    if (b.y === y) keysToErase.push({ key: k, kinds: ['block'] });
+  });
+  activeLevel.prisms.forEach((p, k) => {
+    const py = k.split(',').map(Number)[1];
+    if (py === y) keysToErase.push({ key: k, kinds: ['prism'] });
+  });
+  activeLevel.enemies.forEach((e, k) => {
+    const ey = k.split(',').map(Number)[1];
+    if (ey === y) keysToErase.push({ key: k, kinds: ['enemy'] });
+  });
+
+  keysToErase.forEach(item => {
+    if (editorEraseKey(item.key, item.kinds)) {
+      erasedAny = true;
+    }
+  });
+
+  batchEditing = false;
+  if (batchRebuildNeeded) {
+    buildLevel3D(activeLevel);
+  } else if (erasedAny) {
+    updateEditorSlicing();
+  }
+  drawEditorWires();
+}
+
+function commitPlaneDraw() {
+  if (!isDrawingPlane || !planeStartPos || !planeEndPos) return;
+  isDrawingPlane = false;
+  if (editorPlanePreview) editorPlanePreview.visible = false;
+
+  const minX = Math.min(planeStartPos.x, planeEndPos.x);
+  const maxX = Math.max(planeStartPos.x, planeEndPos.x);
+  const minZ = Math.min(planeStartPos.z, planeEndPos.z);
+  const maxZ = Math.max(planeStartPos.z, planeEndPos.z);
+
+  pushUndoSnapshot();
+
+  batchEditing = true;
+  batchRebuildNeeded = false;
+  let changedAny = false;
+
+  if (BLOCK_TOOLS.includes(selectedTool)) {
+    for (let x = minX; x <= maxX; x++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        if (editorPlaceBlock(x, editY, z, selectedTool)) {
+          changedAny = true;
+        }
+      }
+    }
+    if (changedAny) audio.playPlace(selectedTool);
+  } else if (selectedTool === 'eraser') {
+    const keysToErase = [];
+    activeLevel.blocks.forEach((b, k) => {
+      if (b.y === editY && b.x >= minX && b.x <= maxX && b.z >= minZ && b.z <= maxZ) {
+        keysToErase.push({ key: k, kinds: ['block'] });
+      }
+    });
+    activeLevel.prisms.forEach((p, k) => {
+      const [px, py, pz] = k.split(',').map(Number);
+      if (py === editY && px >= minX && px <= maxX && pz >= minZ && pz <= maxZ) {
+        keysToErase.push({ key: k, kinds: ['prism'] });
+      }
+    });
+    activeLevel.enemies.forEach((e, k) => {
+      const [ex, ey, ez] = k.split(',').map(Number);
+      if (ey === editY && ex >= minX && ex <= maxX && ez >= minZ && ez <= maxZ) {
+        keysToErase.push({ key: k, kinds: ['enemy'] });
+      }
+    });
+
+    keysToErase.forEach(item => {
+      if (editorEraseKey(item.key, item.kinds)) {
+        changedAny = true;
+      }
+    });
+    if (changedAny) audio.playBreak();
+  }
+
+  batchEditing = false;
+  if (batchRebuildNeeded) {
+    buildLevel3D(activeLevel);
+  } else if (changedAny) {
+    updateEditorSlicing();
+  }
+  drawEditorWires();
+
+  planeStartPos = null;
+  planeEndPos = null;
+}
+
 function handleEditorClick(e) {
   const hit = editorRaycast(e);
   if (!hit) return;
+
+  if (keysPressed['KeyV']) {
+    if (BLOCK_TOOLS.includes(selectedTool)) {
+      editorFillPlane(editY, selectedTool);
+      audio.playPlace(selectedTool);
+      return;
+    } else if (selectedTool === 'eraser') {
+      editorClearPlane(editY);
+      audio.playBreak();
+      return;
+    }
+  }
 
   if (selectedTool === 'eraser') {
     if (hit.hitKey) {
@@ -2887,7 +3240,7 @@ function handleEditorClick(e) {
   // ruler to build higher); drag-painting already snaps to that plane.
   if (BLOCK_TOOLS.includes(selectedTool)) {
     if (hit.y === editY && editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playPlace(selectedTool);
-  } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
+  } else if (selectedTool === 'prism' || selectedTool === 'miniprism' || selectedTool === 'plutonium') {
     const c = snapItemCell(hit);
     if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playPlace(selectedTool);
   } else if (selectedTool === 'enemy') {
@@ -2926,7 +3279,7 @@ function handleEditorDragClick(e) {
       if (editorEraseKey(key)) audio.playBreak();
     } else if (BLOCK_TOOLS.includes(selectedTool)) {
       if (editorPlaceBlock(gx, gy, gz, selectedTool)) audio.playPlace(selectedTool);
-    } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
+    } else if (selectedTool === 'prism' || selectedTool === 'miniprism' || selectedTool === 'plutonium') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
       if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playPlace(selectedTool);
     } else if (selectedTool === 'enemy') {
@@ -3072,6 +3425,12 @@ function loadPreMadeLevel(idx) {
    ═══════════════════════════════════════════════════════════ */
 function handleMove(dirX, dirZ) {
   if (isLevelComplete || isEditMode && !isPlaytesting) return;
+  // Re-decide mid-step: pressing the direction opposite to the current roll
+  // aborts it and rolls back to the origin cell.
+  if (isRolling && canReverseRoll() && dirX === -lastMoveDir.x && dirZ === -lastMoveDir.z) {
+    reverseCurrentRoll();
+    return;
+  }
   startRoll(dirX, dirZ);
 }
 
@@ -3088,8 +3447,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyH') { setHelpOpen(!isHelpOpen); return; }
   if (isHelpOpen) { if (e.code === 'Escape') setHelpOpen(false); return; }
 
-  // X-ray view toggle — works in play and editor alike.
-  if (e.code === 'KeyT') { e.preventDefault(); toggleXray(); return; }
+  // X-ray view toggle via KeyT removed at user request to restrict transparency effects to middle click.
 
   // Pause + free-orbit camera toggle (play / playtest only).
   if (e.code === 'KeyP') { e.preventDefault(); togglePause(); return; }
@@ -3172,9 +3530,7 @@ window.addEventListener('keydown', (e) => {
     case 'KeyR': e.preventDefault(); respawnPlayer(); break;
     case 'Space': e.preventDefault();
       if (isLevelComplete) {
-        if (!isEditMode) {
-          currentLevelIdx = (currentLevelIdx+1)%premadeLevels.length; loadPreMadeLevel(currentLevelIdx);
-        }
+        advanceCompletedLevel();
       }
       break;
   }
@@ -3182,6 +3538,9 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
   keysPressed[e.code] = false;
+  if (e.code === 'KeyV' && isDrawingPlane) {
+    commitPlaneDraw();
+  }
   if (e.code === 'KeyO' && currentGroupId !== null) {
     const n = groupMemberCount(currentGroupId);
     currentGroupId = null;
@@ -3208,10 +3567,20 @@ document.querySelectorAll('.ctrl-btn').forEach(btn => {
 renderer.domElement.addEventListener('mousedown', (e) => {
   if (!isEditMode || isPlaytesting) return;
   if (e.button === 0) {
+    if (keysPressed['KeyV'] && (BLOCK_TOOLS.includes(selectedTool) || selectedTool === 'eraser')) {
+      const hit = editorRaycast(e);
+      if (hit) {
+        planeStartPos = { x: hit.x, y: editY, z: hit.z };
+        planeEndPos = { x: hit.x, y: editY, z: hit.z };
+        isDrawingPlane = true;
+      }
+      return;
+    }
+
     // Snapshot once per click / paint-stroke (skip pure linker source-select).
     if (!(selectedTool === 'linker' && linkerSourceKey === null)) pushUndoSnapshot();
     // Left click edit block
-    if (selectedTool !== 'linker') {
+    if (selectedTool !== 'linker' && !keysPressed['KeyV']) {
       isPainting = true;
     }
     handleEditorClick(e);
@@ -3237,91 +3606,120 @@ renderer.domElement.addEventListener('mousemove', (e) => {
     // Update Ghost Block Position
     const hit = editorRaycast(e);
     const tooltip = document.getElementById('editor-tooltip');
-    if (hit && editorGhostBlock) {
-      // Block-placement preview is only shown on the currently selected level.
-      let ghostVisible = !(BLOCK_TOOLS.includes(selectedTool) && hit.y !== editY);
-      // Set ghost block color, geometry and position dynamically based on tool
-      if (selectedTool === 'eraser') {
-        editorGhostBlock.material.color.setHex(0xff3355);
-        if (hit.hitType === 'bridge') {
-          editorGhostBlock.geometry = geoThinTile;
-          editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
-        } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
-          editorGhostBlock.geometry = geoPrism;
-          editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
-        } else if (hit.hitType === 'enemy') {
-          editorGhostBlock.geometry = geoCube;
-          editorGhostBlock.position.set(hit.x, hit.y + 1, hit.z);
-        } else {
-          editorGhostBlock.geometry = geoTile;
-          editorGhostBlock.position.set(hit.x, hit.y, hit.z);
-        }
-      } else if (selectedTool === 'linker') {
-        editorGhostBlock.material.color.setHex(0xffaa00);
-        if (hit.hitType === 'bridge') {
-          editorGhostBlock.geometry = geoThinTile;
-          editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
-        } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
-          editorGhostBlock.geometry = geoPrism;
-          editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
-        } else {
-          editorGhostBlock.geometry = geoTile;
-          editorGhostBlock.position.set(hit.x, hit.y, hit.z);
-        }
-      } else {
-        let ghostColor = 0x00ffcc;
-        if (selectedTool === 'pushable') ghostColor = 0x8b5a2b;
-        else if (selectedTool === 'pressureplate') ghostColor = 0x3366ff;
-        else if (selectedTool === 'danger') ghostColor = 0xff3333;
-        else if (selectedTool === 'shaker') ghostColor = 0x554444;
-        else if (selectedTool === 'booster') ghostColor = 0xffcc00;
-        else if (selectedTool === 'start') ghostColor = 0xff6600;
-        else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
-        else if (selectedTool === 'enemy') ghostColor = 0xff0066;
-        // While grouping (O held), tint the placement preview orange to signal
-        // that the next block will join the current compound object.
-        if (currentGroupId !== null && BLOCK_TOOLS.includes(selectedTool)) ghostColor = 0xffbb33;
-
-        editorGhostBlock.material.color.setHex(ghostColor);
-        let targetY = hit.y;
-        if (selectedTool === 'bridge') {
-          editorGhostBlock.geometry = geoThinTile;
-          targetY = hit.y + 0.4;
-        } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
-          editorGhostBlock.geometry = geoPrism;
-          targetY = hit.y + 0.55;
-        } else if (selectedTool === 'start' || selectedTool === 'exit' || selectedTool === 'enemy') {
-          // Marker preview floats where the player cube / exit ring appears
-          editorGhostBlock.geometry = geoCube;
-          targetY = hit.y + 1;
-        } else {
-          editorGhostBlock.geometry = geoTile;
-        }
-        editorGhostBlock.position.set(hit.x, targetY, hit.z);
-      }
-      editorGhostBlock.visible = ghostVisible;
-
-      // Update Tooltip
-      if (tooltip && ghostVisible) {
-        let text = `${selectedTool.toUpperCase()}`;
-        text += ` <span class="tooltip-coord">(${hit.x}, ${hit.y}, ${hit.z})</span>`;
-        if (hit.hitKey && BLOCK_TOOLS.includes(selectedTool)) {
-          text += ` <span class="tooltip-stacking">Stacking</span>`;
-        }
-        tooltip.innerHTML = text;
-        tooltip.style.left = (e.clientX + 15) + 'px';
-        tooltip.style.top = (e.clientY + 15) + 'px';
-        tooltip.style.display = 'block';
-      } else if (tooltip) {
-        tooltip.style.display = 'none';
-      }
-    } else if (editorGhostBlock) {
-      editorGhostBlock.visible = false;
+    
+    if (isDrawingPlane) {
+      if (editorGhostBlock) editorGhostBlock.visible = false;
       if (tooltip) tooltip.style.display = 'none';
-    }
 
-    if (isPainting) {
-      handleEditorDragClick(e);
+      if (hit) {
+        planeEndPos = { x: hit.x, y: editY, z: hit.z };
+        const minX = Math.min(planeStartPos.x, planeEndPos.x);
+        const maxX = Math.max(planeStartPos.x, planeEndPos.x);
+        const minZ = Math.min(planeStartPos.z, planeEndPos.z);
+        const maxZ = Math.max(planeStartPos.z, planeEndPos.z);
+        
+        const width = (maxX - minX) + 1;
+        const length = (maxZ - minZ) + 1;
+        const centerX = (minX + maxX) / 2;
+        const centerZ = (minZ + maxZ) / 2;
+        
+        if (editorPlanePreview) {
+          editorPlanePreview.position.set(centerX, editY, centerZ);
+          editorPlanePreview.scale.set(width, 1.05, length);
+          editorPlanePreview.material.color.setHex(selectedTool === 'eraser' ? 0xff3355 : 0x00ffaa);
+          editorPlanePreview.visible = true;
+        }
+      }
+    } else {
+      if (editorPlanePreview) editorPlanePreview.visible = false;
+      if (hit && editorGhostBlock) {
+        // Block-placement preview is only shown on the currently selected level.
+        let ghostVisible = !(BLOCK_TOOLS.includes(selectedTool) && hit.y !== editY);
+        // Set ghost block color, geometry and position dynamically based on tool
+        if (selectedTool === 'eraser') {
+          editorGhostBlock.material.color.setHex(0xff3355);
+          if (hit.hitType === 'bridge') {
+            editorGhostBlock.geometry = geoThinTile;
+            editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
+          } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism' || hit.hitType === 'plutonium') {
+            editorGhostBlock.geometry = geoPrism;
+            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+          } else if (hit.hitType === 'enemy') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.position.set(hit.x, hit.y + 1, hit.z);
+          } else {
+            editorGhostBlock.geometry = geoTile;
+            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
+          }
+        } else if (selectedTool === 'linker') {
+          editorGhostBlock.material.color.setHex(0xffaa00);
+          if (hit.hitType === 'bridge') {
+            editorGhostBlock.geometry = geoThinTile;
+            editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
+          } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism' || hit.hitType === 'plutonium') {
+            editorGhostBlock.geometry = geoPrism;
+            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+          } else {
+            editorGhostBlock.geometry = geoTile;
+            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
+          }
+        } else {
+          let ghostColor = 0x00ffcc;
+          if (selectedTool === 'pushable') ghostColor = 0x8b5a2b;
+          else if (selectedTool === 'pressureplate') ghostColor = 0x3366ff;
+          else if (selectedTool === 'danger') ghostColor = 0xff3333;
+          else if (selectedTool === 'shaker') ghostColor = 0x554444;
+          else if (selectedTool === 'booster') ghostColor = 0xffcc00;
+          else if (selectedTool === 'container') ghostColor = 0xffaa00;
+          else if (selectedTool === 'start') ghostColor = 0xff6600;
+          else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
+          else if (selectedTool === 'enemy') ghostColor = 0xff0066;
+          else if (selectedTool === 'plutonium') ghostColor = 0xd946ef;
+          // While grouping (O held), tint the placement preview orange to signal
+          // that the next block will join the current compound object.
+          if (currentGroupId !== null && BLOCK_TOOLS.includes(selectedTool)) ghostColor = 0xffbb33;
+
+          editorGhostBlock.material.color.setHex(ghostColor);
+          let targetY = hit.y;
+          if (selectedTool === 'bridge') {
+            editorGhostBlock.geometry = geoThinTile;
+            targetY = hit.y + 0.4;
+          } else if (selectedTool === 'prism' || selectedTool === 'miniprism' || selectedTool === 'plutonium') {
+            editorGhostBlock.geometry = geoPrism;
+            targetY = hit.y + 0.55;
+          } else if (selectedTool === 'start' || selectedTool === 'exit' || selectedTool === 'enemy') {
+            // Marker preview floats where the player cube / exit ring appears
+            editorGhostBlock.geometry = geoCube;
+            targetY = hit.y + 1;
+          } else {
+            editorGhostBlock.geometry = geoTile;
+          }
+          editorGhostBlock.position.set(hit.x, targetY, hit.z);
+        }
+        editorGhostBlock.visible = ghostVisible;
+
+        // Update Tooltip
+        if (tooltip && ghostVisible) {
+          let text = `${selectedTool.toUpperCase()}`;
+          text += ` <span class="tooltip-coord">(${hit.x}, ${hit.y}, ${hit.z})</span>`;
+          if (hit.hitKey && BLOCK_TOOLS.includes(selectedTool)) {
+            text += ` <span class="tooltip-stacking">Stacking</span>`;
+          }
+          tooltip.innerHTML = text;
+          tooltip.style.left = (e.clientX + 15) + 'px';
+          tooltip.style.top = (e.clientY + 15) + 'px';
+          tooltip.style.display = 'block';
+        } else if (tooltip) {
+          tooltip.style.display = 'none';
+        }
+      } else if (editorGhostBlock) {
+        editorGhostBlock.visible = false;
+        if (tooltip) tooltip.style.display = 'none';
+      }
+
+      if (isPainting) {
+        handleEditorDragClick(e);
+      }
     }
   }
 });
@@ -3330,6 +3728,9 @@ window.addEventListener('mouseup', (e) => {
   isDraggingCamera = false;
   if (e.button === 0) {
     isPainting = false;
+    if (isDrawingPlane) {
+      commitPlaneDraw();
+    }
   }
 });
 
@@ -3353,6 +3754,41 @@ window.addEventListener('wheel', (e) => {
     // Zoom camera
     editorCameraZoom = Math.max(5, Math.min(45, editorCameraZoom + (e.deltaY * 0.01)));
   }
+});
+
+/* ═══ GAMEPLAY MOUSE: middle-click X-ray · left-drag camera peek ═══
+   Active during play and playtest (not pure editing, not while paused — the
+   editor and the pause orbit own the mouse in those modes). */
+function isGameplayMouseMode() {
+  return (!isEditMode || isPlaytesting) && !isPaused;
+}
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (!isGameplayMouseMode()) return;
+  if (e.button === 1) {
+    // Middle click → toggle full see-through (all blocks transparent).
+    e.preventDefault();
+    audio.init();
+    toggleXray();
+  } else if (e.button === 0) {
+    // Left button → start a camera peek; released → it swings back (render loop).
+    peekActive = true;
+    peekLast = { x: e.clientX, y: e.clientY };
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (!peekActive) return;
+  const dx = e.clientX - peekLast.x;
+  const dy = e.clientY - peekLast.y;
+  peekLast = { x: e.clientX, y: e.clientY };
+  peekYaw = THREE.MathUtils.clamp(peekYaw - dx * 0.005, -0.6, 0.6);
+  peekPitch = THREE.MathUtils.clamp(peekPitch + dy * 0.004, -0.30, 0.45);
+});
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) peekActive = false; // release → ease back to default angle
+});
+// Suppress the middle-click autoscroll puck during play.
+renderer.domElement.addEventListener('auxclick', (e) => {
+  if (e.button === 1 && isGameplayMouseMode()) e.preventDefault();
 });
 
 /* ═══ PAUSE FREE-ORBIT INPUT (mouse + touch): drag to rotate, wheel/pinch to zoom ═══ */
@@ -3587,12 +4023,14 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
     miniprisms:   qty('miniprisms'),
     secretRooms:  qty('secretRooms'),
     iceCorridors: qty('iceCorridors'),
+    plutonium:    qty('plutonium'),
     // Tuning knobs — custom value when checked, otherwise auto from size.
     pathLength:   knob('pathLength'),
     arenaSize:    knob('arenaSize'),
     parTightness: knob('parTightness'),
     branchLen:    knob('branchLen'),
     moverSpeed:   knob('moverSpeed'),
+    plutoniumTime: cb('ai3-plutoniumTime') ? num('ai3-plutoniumTime-n') : 30,
     buildLimit:   cb('ai3-buildLimit') ? num('ai3-buildLimit-n') : 10,
   };
 
@@ -3758,6 +4196,12 @@ document.getElementById('btn-modal-load').addEventListener('click', () => {
   }
 });
 
+document.getElementById('complete-overlay').addEventListener('click', () => {
+  if (isLevelComplete) {
+    advanceCompletedLevel();
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════
    ENEMY AI & LIVES
    ═══════════════════════════════════════════════════════════ */
@@ -3768,15 +4212,15 @@ function getEnemyMoveTargetY(fromX, fromY, fromZ, toX, toZ) {
   const sameLevel = colBlocks.find(b => b.y === fromY);
   const stepDown  = colBlocks.find(b => b.y === fromY - 1);
 
-  if (stepUp) {
+  if (stepUp && stepUp.type !== 'pushable') {
     if (!colBlocks.find(b => b.y === fromY + 2) && !currentCeiling) return fromY + 1;
     return null;
   }
-  if (sameLevel) {
+  if (sameLevel && sameLevel.type !== 'pushable') {
     if (!colBlocks.find(b => b.y === fromY + 1)) return fromY;
     return null;
   }
-  if (stepDown) {
+  if (stepDown && stepDown.type !== 'pushable') {
     if (!colBlocks.find(b => b.y === fromY)) return fromY - 1;
     return null;
   }
@@ -3841,6 +4285,45 @@ function findEnemySpawnKey() {
   return `${best.x},${best.y},${best.z}`;
 }
 
+function checkEnemiesTrappedWin() {
+  if (isLevelComplete) return;
+  // ONLY evaluate if there are active enemies in the level
+  if (enemies.length === 0) return;
+
+  let allTrapped = true;
+  for (const enemy of enemies) {
+    const ex = enemy.grid.x;
+    const ey = enemy.grid.y;
+    const ez = enemy.grid.z;
+
+    // Check neighbors at ey + 1 (since block coordinates are at y+1 relative to the standing level):
+    const neighbors = [
+      { x: ex + 1, y: ey + 1, z: ez },
+      { x: ex - 1, y: ey + 1, z: ez },
+      { x: ex, y: ey + 1, z: ez + 1 },
+      { x: ex, y: ey + 1, z: ez - 1 }
+    ];
+
+    let trappedCount = 0;
+    for (const n of neighbors) {
+      // Find if there is a block at neighbor position and Y level, and it is a crate ('pushable')
+      const block = activeBlocks.get(`${n.x},${n.y},${n.z}`);
+      if (block && block.type === 'pushable') {
+        trappedCount++;
+      }
+    }
+
+    if (trappedCount < 4) {
+      allTrapped = false;
+      break;
+    }
+  }
+
+  if (allTrapped) {
+    completeLevel();
+  }
+}
+
 function startEnemyRoll(enemy, dx, dz) {
   const toGX = enemy.grid.x + dx, toGZ = enemy.grid.z + dz;
   const ny = getEnemyMoveTargetY(enemy.grid.x, enemy.grid.y, enemy.grid.z, toGX, toGZ);
@@ -3896,29 +4379,50 @@ function updateDynamicTransparency() {
   if (isEditMode && !isPlaytesting) {
     // Reset all opacities in editor mode (rely entirely on slice mode transparency)
     activeBlocks.forEach(block => {
-      if (block.mesh) {
+      if (block.mesh && !block.playerPlaced) {
         const isInactiveBridge = (block.type === 'bridge' && block.active === false);
         const isBelow = (sliceModeActive && block.y < editY);
-        if (isInactiveBridge || isBelow) {
-          setMeshOpacity(block.mesh, 0.2, false);
+        if (isBelow) {
+          block.mesh.traverse(m => {
+            if (m.isMesh && m.material) {
+              const mats = Array.isArray(m.material) ? m.material : [m.material];
+              mats.forEach(mat => {
+                mat.wireframe = false;
+              });
+            }
+          });
+          setMeshOpacity(block.mesh, 1.0, true);
+        } else if (isInactiveBridge) {
+          block.mesh.traverse(m => {
+            if (m.isMesh && m.material) {
+              const mats = Array.isArray(m.material) ? m.material : [m.material];
+              mats.forEach(mat => {
+                mat.wireframe = true;
+                mat.transparent = false;
+                mat.opacity = 1.0;
+              });
+            }
+          });
         } else {
+          block.mesh.traverse(m => {
+            if (m.isMesh && m.material) {
+              const mats = Array.isArray(m.material) ? m.material : [m.material];
+              mats.forEach(mat => {
+                mat.wireframe = false;
+              });
+            }
+          });
           setMeshOpacity(block.mesh, 1.0, true);
         }
       }
     });
     movingPlatformsList.forEach(mp => {
       if (mp.mesh) {
-        const mpy = Math.round(mp.position.y);
-        const isBelow = (sliceModeActive && mpy < editY);
-        if (isBelow) {
-          mp.mesh.visible = true;
-          mp.mesh.material.transparent = true;
-          mp.mesh.material.opacity = 0.2;
-        } else {
-          mp.mesh.visible = true;
-          mp.mesh.material.transparent = false;
-          mp.mesh.material.opacity = 1.0;
-        }
+        const mpMat = mp.mesh.material;
+        mp.mesh.visible = true;
+        if (mpMat.transparent !== false) mpMat.needsUpdate = true;
+        mpMat.transparent = false;
+        mpMat.opacity = 1.0;
       }
     });
     return;
@@ -3926,148 +4430,53 @@ function updateDynamicTransparency() {
 
   if (!playerCube) return;
 
-  // 1. Gather player target points (7 points covering the cube)
-  const targets = [
-    playerCube.position.clone(), // Center
-    playerCube.position.clone().add(new THREE.Vector3(0, 0.45, 0)),  // Top
-    playerCube.position.clone().add(new THREE.Vector3(0, -0.45, 0)), // Bottom
-    playerCube.position.clone().add(new THREE.Vector3(0.45, 0, 0)),   // Right
-    playerCube.position.clone().add(new THREE.Vector3(-0.45, 0, 0)),  // Left
-    playerCube.position.clone().add(new THREE.Vector3(0, 0, 0.45)),   // Front
-    playerCube.position.clone().add(new THREE.Vector3(0, 0, -0.45))   // Back
-  ];
+  // X-ray view (toggled with a middle-mouse click): force every block and
+  // platform see-through so the whole structure reads at once. Edge outlines,
+  // prisms and enemy markers stay opaque, so the level is still legible.
+  if (xrayMode) {
+    activeBlocks.forEach(block => {
+      if (!block.mesh) return;
+      setMeshOpacity(block.mesh, 0.5, false); // 50% transparency
+      block.mesh.traverse(child => {
+        if (child !== block.mesh && child.material && !(child.isLineSegments)) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach(mat => {
+            if (!mat.transparent) mat.needsUpdate = true;
+            mat.visible = true; mat.transparent = true; mat.opacity = 0.5; mat.depthWrite = false;
+          });
+        }
+      });
+    });
+    movingPlatformsList.forEach(mp => {
+      if (!mp.mesh) return;
+      const mpMat = mp.mesh.material;
+      mp.mesh.visible = true;
+      if (!mpMat.transparent) mpMat.needsUpdate = true;
+      mpMat.transparent = true; mpMat.opacity = 0.5; mpMat.depthWrite = false;
+    });
+    return;
+  }
 
-  // 2. Gather candidate meshes that can obstruct view
-  const candidateMeshes = [];
-  const meshToBlockMap = new Map();
+  // If xrayMode is false, make everything solid / opaque.
   activeBlocks.forEach(block => {
-    if (block.mesh) {
-      candidateMeshes.push(block.mesh);
-      meshToBlockMap.set(block.mesh.id, block);
-    }
-  });
-  movingPlatformsList.forEach(mp => {
-    if (mp.mesh) {
-      candidateMeshes.push(mp.mesh);
-    }
-  });
-
-  const obstructingBlocks = new Set();
-  const obstructingPlatforms = new Set();
-  const raycaster = new THREE.Raycaster();
-  const camPos = camera.position;
-
-  targets.forEach(targetPos => {
-    const dir = targetPos.clone().sub(camPos);
-    const dist = dir.length();
-    if (dist < 0.1) return;
-    
-    dir.normalize();
-    raycaster.set(camPos, dir);
-    raycaster.far = dist; // Raycast exactly to the target to avoid missing close-range obstacles
-    
-    const intersects = raycaster.intersectObjects(candidateMeshes, true);
-    intersects.forEach(hit => {
-      let obj = hit.object;
-      let block = null;
-      let platform = null;
-      while (obj) {
-        if (meshToBlockMap.has(obj.id)) {
-          block = meshToBlockMap.get(obj.id);
-          break;
-        }
-        const foundMp = movingPlatformsList.find(mp => mp.mesh === obj);
-        if (foundMp) {
-          platform = foundMp;
-          break;
-        }
-        obj = obj.parent;
-      }
-      
-      const playerGridY = Math.round(playerCube.position.y);
-      if (block) {
-        if (block.y >= playerGridY) {
-          obstructingBlocks.add(block);
-        }
-      } else if (platform) {
-        const platformGridY = Math.round(platform.position.y);
-        if (platformGridY >= playerGridY) {
-          obstructingPlatforms.add(platform);
-        }
+    if (!block.mesh) return;
+    setMeshOpacity(block.mesh, 1.0, true);
+    block.mesh.traverse(child => {
+      if (child !== block.mesh && child.material && !child.isLineSegments) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach(mat => {
+          if (mat.transparent !== false) mat.needsUpdate = true;
+          mat.visible = true; mat.transparent = false; mat.opacity = 1.0; mat.depthWrite = true;
+        });
       }
     });
   });
-
-  // 3. Apply opacity to blocks
-  activeBlocks.forEach(block => {
-    if (block.mesh) {
-      const isObstructing = obstructingBlocks.has(block);
-      const isInactiveBridge = (block.type === 'bridge' && block.active === false);
-      const isBelow = (sliceModeActive && block.y < editY);
-      
-      if (isInactiveBridge || isBelow) {
-        // Inactive or sliced blocks are always translucent
-        setMeshOpacity(block.mesh, 0.2, false);
-      } else if (isObstructing) {
-        // Block blocks a part of the player -> make transparent (translucent solid faces)
-        setMeshOpacity(block.mesh, 0.2, false);
-        
-        // Traverse children (spikes, switches, plate buttons, etc.) and make transparent
-        block.mesh.traverse(child => {
-          if (child !== block.mesh && child.material) {
-            const mats = Array.isArray(child.material) ? child.material : [child.material];
-            mats.forEach(mat => {
-              mat.visible = true;
-              mat.transparent = true;
-              mat.opacity = 0.2;
-              mat.depthWrite = false;
-            });
-          }
-        });
-      } else {
-        // Normal fully opaque block
-        setMeshOpacity(block.mesh, 1.0, true);
-        
-        // Restore child props to visible
-        block.mesh.traverse(child => {
-          if (child !== block.mesh && child.material) {
-            const mats = Array.isArray(child.material) ? child.material : [child.material];
-            mats.forEach(mat => {
-              mat.visible = true;
-              mat.transparent = false;
-              mat.opacity = 1.0;
-              mat.depthWrite = true;
-            });
-          }
-        });
-      }
-    }
-  });
-
-  // 4. Apply opacity to moving platforms
   movingPlatformsList.forEach(mp => {
-    if (mp.mesh) {
-      const isObstructing = obstructingPlatforms.has(mp);
-      const mpy = Math.round(mp.position.y);
-      const isBelow = (sliceModeActive && mpy < editY);
-      
-      if (isBelow) {
-        mp.mesh.visible = true;
-        mp.mesh.material.transparent = true;
-        mp.mesh.material.opacity = 0.2;
-      } else {
-        mp.mesh.visible = true;
-        if (isObstructing) {
-          mp.mesh.material.transparent = true;
-          mp.mesh.material.opacity = 0.2;
-          mp.mesh.material.depthWrite = false;
-        } else {
-          mp.mesh.material.transparent = false;
-          mp.mesh.material.opacity = 1.0;
-          mp.mesh.material.depthWrite = true;
-        }
-      }
-    }
+    if (!mp.mesh) return;
+    const mpMat = mp.mesh.material;
+    mp.mesh.visible = true;
+    if (mpMat.transparent !== false) mpMat.needsUpdate = true;
+    mpMat.transparent = false; mpMat.opacity = 1.0; mpMat.depthWrite = true;
   });
 }
 
@@ -4080,6 +4489,18 @@ function animate(timestamp) {
   requestAnimationFrame(animate);
   const now = timestamp/1000;
   const dt = Math.min(clock.getDelta(), 0.1);
+
+  // Update container materials blinking (black and yellow alternate at 2Hz)
+  if (containerMeshes.length > 0) {
+    const blink = (Math.sin(now * Math.PI * 4) + 1) / 2;
+    containerMeshes.forEach(mesh => {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      mats.forEach(m => {
+        m.emissive.setRGB(blink * 1.0, blink * 0.8, 0);
+        m.emissiveIntensity = blink * 1.5;
+      });
+    });
+  }
 
   // Dynamic transparency update (throttled for high performance)
   transparencyUpdateTimer++;
@@ -4122,6 +4543,29 @@ function animate(timestamp) {
   if (!isEditMode || isPlaytesting) {
     // Game time
     if (!isLevelComplete) { elapsedTime += dt; gameTimer += dt; }
+    
+    if (isCarryingPlutonium && !isLevelComplete && !isPaused) {
+      plutoniumTimer -= dt;
+      if (plutoniumTimer <= 0) {
+        plutoniumTimer = 0;
+        isCarryingPlutonium = false;
+        const phud = document.getElementById('plutonium-hud-bar');
+        if (phud) phud.style.display = 'none';
+        showMessage('PLUTONIUM EXPLODED!', 2.0);
+        audio.playDamage();
+        respawnPlayer();
+      } else {
+        const phudFill = document.getElementById('plutonium-hud-fill');
+        const phudText = document.getElementById('plutonium-hud-text');
+        if (phudFill && phudText) {
+          const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
+          const pct = Math.max(0, Math.min(100, (plutoniumTimer / limit) * 100));
+          phudFill.style.width = pct + '%';
+          phudText.textContent = `PLUTONIUM: ${plutoniumTimer.toFixed(1)}s`;
+        }
+      }
+    }
+
     if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) { comboCount = 0; updateComboUI(); } }
 
     // Edge Balancing update
@@ -4360,6 +4804,7 @@ function animate(timestamp) {
         playerCube.visible = true;
       }
     }
+    checkEnemiesTrappedWin();
     // ─── END ENEMY ───────────────────────────────────────────
 
     // Camera targets follow player
@@ -4374,7 +4819,20 @@ function animate(timestamp) {
       shakeIntensity *= 0.85;
     } else { cameraShake.set(0,0,0); shakeIntensity = 0; }
 
+    // Camera peek: while the left button is held the view is nudged by
+    // peekYaw/peekPitch; once released it eases smoothly back to neutral.
+    if (!peekActive) {
+      peekYaw  += (0 - peekYaw)  * 0.12;
+      peekPitch += (0 - peekPitch) * 0.12;
+      if (Math.abs(peekYaw)  < 1e-3) peekYaw = 0;
+      if (Math.abs(peekPitch) < 1e-3) peekPitch = 0;
+    }
     const offset = new THREE.Vector3(7, 8.5, 8);
+    if (peekYaw !== 0 || peekPitch !== 0) {
+      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), peekYaw); // orbit horizontally
+      const horizAxis = new THREE.Vector3(-offset.z, 0, offset.x).normalize();
+      offset.applyAxisAngle(horizAxis, peekPitch);               // tilt vertically
+    }
     const desCam = cameraLookAt.clone().add(offset).add(cameraShake);
     camera.position.lerp(desCam, CAM_LERP*0.7);
     camera.lookAt(cameraLookAt.clone().add(cameraShake));
@@ -4488,6 +4946,8 @@ const HELP_ELEMENTS = [
   { name:'Exit',           swatch:'background:#00ffaa;border-radius:50%;', desc:'The goal ring — reach it (with every prism) to clear the level.' },
   { name:'Prism',          swatch:'background:#ffdd44;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);', desc:'Collect them all — usually required to finish a level.' },
   { name:'Mini-Prism',     swatch:'background:#00ccff;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.7);', desc:'Shrinks you for a short time — climb walls and squeeze under bridges.' },
+  { name:'Plutonium',      swatch:'background:#d946ef;box-shadow:0 0 8px #d946ef;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.8);', desc:'Purple glowing collectible. Starts a countdown timer once collected.' },
+  { name:'Container',      swatch:'background:repeating-linear-gradient(45deg,#ffd300,#ffd300 4px,#111 4px,#111 8px);border:1px solid #ffd300;', desc:'Yellow/black blinking container. Step on it to deposit your Plutonium before the timer runs out.' },
 ];
 
 (function setupHelp() {
@@ -4505,6 +4965,20 @@ const HELP_ELEMENTS = [
   document.getElementById('help-close')?.addEventListener('click', () => setHelpOpen(false));
   document.getElementById('help-hint')?.addEventListener('click', () => setHelpOpen(true));
   overlay?.addEventListener('click', (e) => { if (e.target === overlay) setHelpOpen(false); });
+
+  // Fullscreen toggle (bottom-left).
+  const fsBtn = document.getElementById('fullscreen-btn');
+  const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const syncFsIcon = () => fsBtn?.classList.toggle('active', isFs());
+  fsBtn?.addEventListener('click', () => {
+    audio.init(); audio.playClick();
+    const p = isFs()
+      ? (document.exitFullscreen || document.webkitExitFullscreen)?.call(document)
+      : (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)?.call(document.documentElement);
+    if (p && typeof p.catch === 'function') p.catch(() => {}); // ignore gesture/permission rejections
+  });
+  document.addEventListener('fullscreenchange', syncFsIcon);
+  document.addEventListener('webkitfullscreenchange', syncFsIcon);
 
   // Title card: show for ~1 second, then fade out.
   const title = document.getElementById('title-splash');
@@ -4570,7 +5044,7 @@ function tryPlaceBlock(stepUp) {
     return;
   }
 
-  const block = { x: targetX, y: targetY, z: targetZ, type: 'normal', properties: {}, active: true, broken: false };
+  const block = { x: targetX, y: targetY, z: targetZ, type: 'normal', properties: {}, active: true, broken: false, playerPlaced: true };
   activeBlocks.set(key, block);
   createBlockMesh(block, key);
 

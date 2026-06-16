@@ -197,6 +197,7 @@ class SidCoreProcessor extends AudioWorkletProcessor {
       arpTimer: 0,
       gate: true,
       age: 0,
+      volume: (typeof sfxData.volume === "number") ? sfxData.volume : 1.0,
       duration: sfxData.frames ? sfxData.frames.len : 30
     };
     
@@ -646,8 +647,12 @@ class SidCoreProcessor extends AudioWorkletProcessor {
     
     for (let v = 0; v < 3; v++) {
       const voice = this.voices[v];
-      const isArpSfx = (this.voiceAlloc[v] && this.voiceAlloc[v] !== "music" && this.voiceAlloc[v].arp);
-      const vol = (this.voiceAlloc[v] === "music") ? this.musicVolume : (this.sfxVolume * (isArpSfx ? 0.35 : 1.0));
+      const alloc = this.voiceAlloc[v];
+      const isMusic = (alloc === "music");
+      const isArpSfx = (alloc && !isMusic && alloc.arp);
+      // Per-SFX loudness so frequent cues can stay subtle and important ones dominant.
+      const perSfxVol = (alloc && !isMusic && typeof alloc.volume === "number") ? alloc.volume : 1.0;
+      const vol = isMusic ? this.musicVolume : (this.sfxVolume * (isArpSfx ? 0.35 : 1.0) * perSfxVol);
       const outVal = voiceOutputs[v] * vol;
       
       if (voice.filterEnabled) {

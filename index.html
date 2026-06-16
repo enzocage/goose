@@ -49,6 +49,12 @@
 <!-- Mini Cube powerup HUD -->
 <div id="mini-hud-bar"><div id="mini-hud-fill"></div></div>
 
+<!-- Plutonium countdown HUD -->
+<div id="plutonium-hud-bar">
+  <div id="plutonium-hud-fill"></div>
+  <div id="plutonium-hud-text">PLUTONIUM: 30.0s</div>
+</div>
+
 <!-- Editor UI Overlay -->
 <div id="editor-ui" style="display: none;">
   <!-- Left Panel: Toolbox -->
@@ -104,6 +110,10 @@
         <span class="tool-icon" style="background:#223322; border:1px solid #ffcc00;"></span>
         Booster
       </button>
+      <button class="tool-btn" data-tool="container" title="Plutonium Container (yellow/black blinking)">
+        <span class="tool-icon container-blink-btn" style="background: repeating-linear-gradient(45deg, #ffd300, #ffd300 4px, #111 4px, #111 8px); border:1px solid #ffd300;"></span>
+        Container
+      </button>
     </div>
     
     <div class="tool-section-title">Items</div>
@@ -123,6 +133,10 @@
       <button class="tool-btn" data-tool="miniprism" title="Mini-Prism Powerup">
         <span class="tool-icon" style="background:#00ccff; clip-path:polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); scale:0.7;"></span>
         Mini-P
+      </button>
+      <button class="tool-btn" data-tool="plutonium" title="Purple Plutonium (Starts countdown timer)">
+        <span class="tool-icon plutonium-btn" style="background:#d946ef; box-shadow: 0 0 8px #d946ef; clip-path:polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);"></span>
+        Plutonium
       </button>
       <button class="tool-btn" data-tool="enemy" title="Rainbow Enemy — chases the player (place several)">
         <span class="tool-icon" style="background:linear-gradient(135deg,#ff0066,#ffcc00,#00ccff);"></span>
@@ -335,6 +349,7 @@
         <label class="ai3-option"><input type="checkbox" id="ai3-miniprisms" checked><span class="ai3-text"><b>Bonus-Mini-Prismen</b><small>Anzahl Belohnungen</small></span><input type="number" class="ai3-qty" id="ai3-miniprisms-n" min="1" max="20" value="5"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-secretRooms"><span class="ai3-text"><b>Geheim-Kammern</b><small>Anzahl Bonus-Räume</small></span><input type="number" class="ai3-qty" id="ai3-secretRooms-n" min="1" max="8" value="2"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-iceCorridors"><span class="ai3-text"><b>Eis-Korridore</b><small>Anzahl Rutsch-Strecken</small></span><input type="number" class="ai3-qty" id="ai3-iceCorridors-n" min="1" max="8" value="2"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-plutonium"><span class="ai3-text"><b>Plutonium &amp; Container</b><small>Anzahl Elemente</small></span><input type="number" class="ai3-qty" id="ai3-plutonium-n" min="1" max="10" value="2"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-buildLimit" checked><span class="ai3-text"><b>Block-Limit</b><small>Menge Platzierbare Blöcke</small></span><input type="number" class="ai3-qty" id="ai3-buildLimit-n" min="0" max="99" value="10"></label>
       </div>
 
@@ -345,6 +360,7 @@
         <label class="ai3-option"><input type="checkbox" id="ai3-parTightness"><span class="ai3-text"><b>Par-Strenge</b><small>1 = locker, 10 = knapp</small></span><input type="number" class="ai3-qty" id="ai3-parTightness-n" min="1" max="10" value="5"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-branchLen"><span class="ai3-text"><b>Nebenweg-Länge</b><small>Felder je Nebenweg</small></span><input type="number" class="ai3-qty" id="ai3-branchLen-n" min="2" max="10" value="4"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-moverSpeed"><span class="ai3-text"><b>Plattform-Tempo</b><small>1 = langsam, 10 = schnell</small></span><input type="number" class="ai3-qty" id="ai3-moverSpeed-n" min="1" max="10" value="5"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-plutoniumTime"><span class="ai3-text"><b>Plutonium-Timer</b><small>Countdown in Sekunden</small></span><input type="number" class="ai3-qty" id="ai3-plutoniumTime-n" min="5" max="180" value="30"></label>
       </div>
     </div>
 
@@ -408,6 +424,12 @@
   <div class="intro-hint">press <span class="kbd">H</span> for help</div>
 </div>
 
+<!-- Fullscreen toggle (bottom-left) -->
+<button id="fullscreen-btn" title="Toggle fullscreen" aria-label="Toggle fullscreen">
+  <svg class="fs-enter" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+  <svg class="fs-exit" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M21 8h-3a2 2 0 0 1-2-2V3"></path><path d="M3 16h3a2 2 0 0 1 2 2v3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path></svg>
+</button>
+
 <!-- Persistent help hint -->
 <button id="help-hint">press <span class="kbd">H</span> for help</button>
 
@@ -431,7 +453,7 @@
           <div><span class="kbd">E</span> — place block in front at standing height (costs 1 block limit)</div>
           <div><span class="kbd">Q</span> — place block in front 1 level higher (act as a stair/step)</div>
           <div><span class="kbd">R</span> — restart level</div>
-          <div><span class="kbd">T</span> — x-ray view: makes blocks see-through so you can reveal the whole 3D structure hidden behind walls</div>
+          <div><span class="kbd">Middle Click</span> — x-ray view: makes blocks see-through so you can reveal the whole 3D structure hidden behind walls</div>
           <div><span class="kbd">P</span> — pause &amp; free-orbit camera: drag to rotate 360° around your cube (always centred), wheel or pinch to zoom — works with mouse &amp; touch</div>
           <div><span class="kbd">H</span> — toggle this help</div>
           <div>♪ icon (bottom-left) — background music player</div>
@@ -444,6 +466,7 @@
         <p>Click <b>Editor</b> (top bar) to build your own level. Pick a block or item from the left <b>Toolbox</b>, then place it on the grid. Set the spawn (<b>Start</b>) and goal (<b>Exit</b>), and use <b>Playtest</b> to try your level — <b>Exit</b> returns to the editor.</p>
         <div class="help-keys">
           <div><span class="kbd">Left&nbsp;Click</span> — place / paint the selected tool · drag to paint a row</div>
+          <div>Hold <span class="kbd">V</span> + <span class="kbd">Drag Left&nbsp;Click</span> — draw a rectangular plane (width &amp; length) of blocks; release V or mouse to commit</div>
           <div><span class="kbd">Right&nbsp;Click</span> — erase (tap) · <b>Right&nbsp;Drag</b> — orbit the camera</div>
           <div><span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> / <span class="kbd">Q</span><span class="kbd">E</span> — pan &amp; rotate the editor camera · wheel — zoom</div>
           <div><span class="kbd">R</span> / <span class="kbd">F</span> — raise / lower the editing height · <b>Shift</b>+wheel or the right-side ruler also change height</div>
