@@ -1,304 +1,774 @@
-/* ═══ GENERATIVE AUDIO ENGINE (Web Audio API) ═══ */
+import { SidForge } from './sidforge.js';
+
+/* ═══ GENERATIVE AUDIO ENGINE (SidForge C64 SID Emulation) ═══ */
 export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.master = null;
     this.ready = false;
-    this._ambientOscs = [];
-    this._balanceNodes = null;
+    this.initializing = false;
+    this.sid = null;
   }
 
-  init() {
-    if (this.ready) return;
+  async init() {
+    if (this.ready || this.initializing) return;
+    this.initializing = true;
     try {
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
       this.master = this.ctx.createGain();
+      // Keep master gain comfortable
       this.master.gain.value = 0.5;
       this.master.connect(this.ctx.destination);
+
+      // Initialize SidForge
+      this.sid = await SidForge.create({ audioCtx: this.ctx });
+      this.sid.loadSfxBank(this.getSfxBank());
+      // Adjust volumes: low music tracker background (if any) and moderate arcade SFX
+      this.sid.setVolume(0.15, 0.45);
+
       this.ready = true;
-    } catch(e) { /* no audio */ }
+    } catch (e) {
+      console.error("Failed to initialize SidForge audio engine:", e);
+    } finally {
+      this.initializing = false;
+    }
   }
 
-  _now() { return this.ctx.currentTime; }
+  _resumeCtx() {
+    if (this.ctx && this.ctx.state !== 'running') {
+      this.ctx.resume().catch(err => console.warn("AudioContext resume failed:", err));
+    }
+  }
+
+  getSfxBank() {
+    return {
+      // --- SUBTLE & FREQUENT EVENTS ---
+      roll: {
+        wave: "triangle",
+        adsr: [0, 4, 0, 2], // Snappy attack, very fast decay/release
+        pitch: { startFreq: 60, slide: -3 }, // Soft low-frequency block rotation thud
+        frames: { len: 4 } // Super short, avoids cluttering audio space
+      },
+      enemyRoll: {
+        wave: "triangle",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 45, slide: -2 }, // Distinctly lower, soft rotation bump for chasers
+        frames: { len: 4 }
+      },
+      ice: {
+        wave: "noise",
+        adsr: [0, 5, 0, 2],
+        pitch: { startFreq: 1800, slide: -40 },
+        filter: { cutoff: 0.85, sweep: -0.05, res: 5, mode: "hp" }, // Soft, short highpass slide whisper
+        frames: { len: 6 }
+      },
+      click: {
+        wave: "triangle",
+        adsr: [0, 2, 0, 1],
+        pitch: { startFreq: 800, slide: -100 }, // Minimalist microscopic wood-block click
+        frames: { len: 2 }
+      },
+      typewriterTick: {
+        wave: "noise",
+        adsr: [0, 1, 0, 1],
+        pitch: { startFreq: 3000 }, // Extremely tiny, soft mechanical snap
+        frames: { len: 1 }
+      },
+      heightChangeUp: {
+        wave: "triangle",
+        adsr: [0, 3, 0, 2],
+        pitch: { startFreq: 300, slide: 16 }, // Gentle pitch-up cue for raising height
+        frames: { len: 5 }
+      },
+      heightChangeDown: {
+        wave: "triangle",
+        adsr: [0, 3, 0, 2],
+        pitch: { startFreq: 380, slide: -16 }, // Gentle pitch-down cue for lowering height
+        frames: { len: 5 }
+      },
+      groupAdd: {
+        wave: "pulse",
+        adsr: [0, 3, 0, 1],
+        pitch: { startFreq: 500 }, // Cute, short pulse tick when linking block to a group
+        frames: { len: 3 }
+      },
+      toolSelect: {
+        wave: "triangle",
+        adsr: [0, 3, 0, 2],
+        pitch: { startFreq: 400, slide: 20 }, // Tiny positive blip for selecting a designer tool
+        frames: { len: 5 }
+      },
+
+      // --- PROMINENT & GAMEPLAY-SIGNIFICANT EVENTS ---
+      collect: {
+        wave: "pulse",
+        adsr: [0, 4, 8, 4],
+        pitch: { startFreq: 600 },
+        arp: { offsets: [0, 4, 7, 12, 16], speed: 2 }, // Satisfying bright arpeggiating chime
+        pw: { start: 1500, speed: 200 },
+        frames: { len: 16 }
+      },
+      teleport: {
+        wave: "triangle+sawtooth",
+        adsr: [4, 8, 4, 8],
+        pitch: { startFreq: 150, slide: 35 },
+        vibrato: { speed: 0.5, depth: 25 },
+        filter: { cutoff: 0.1, sweep: 0.04, res: 14, mode: "bp" }, // Rich bandpass sweep representing spatial shift
+        frames: { len: 25 }
+      },
+      booster: {
+        wave: "sawtooth",
+        adsr: [2, 6, 2, 4],
+        pitch: { startFreq: 120, slide: 70 }, // Futuristic sweep-up rocket charge
+        frames: { len: 15 }
+      },
+      leap: {
+        wave: "noise",
+        adsr: [3, 8, 0, 4],
+        pitch: { startFreq: 2000, slide: -120 },
+        filter: { cutoff: 0.8, sweep: -0.05, res: 8, mode: "bp" }, // Heavy gust of air as player launches
+        frames: { len: 18 }
+      },
+      fall: {
+        wave: "sawtooth",
+        adsr: [3, 12, 0, 10],
+        pitch: { startFreq: 500, slide: -12 },
+        vibrato: { speed: 0.6, depth: 30 }, // Tragic, wobbly pitch-fall slide down into the void
+        frames: { len: 35 }
+      },
+      land: {
+        wave: "triangle",
+        adsr: [0, 8, 0, 4],
+        pitch: { startFreq: 120, slide: -8 }, // Heavy, bassy block landing impact thump
+        frames: { len: 10 }
+      },
+      shrink: {
+        wave: "triangle",
+        adsr: [2, 6, 0, 4],
+        pitch: { startFreq: 250, slide: 30 },
+        vibrato: { speed: 0.4, depth: 15 }, // Playful ascending magic spell effect
+        frames: { len: 15 }
+      },
+      grow: {
+        wave: "triangle",
+        adsr: [2, 6, 0, 4],
+        pitch: { startFreq: 900, slide: -30 },
+        vibrato: { speed: 0.4, depth: 15 }, // Playful descending magic spell effect
+        frames: { len: 15 }
+      },
+      switch: {
+        wave: "noise+pulse",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 1500, slide: -150 }, // Solid, crisp mechanical relay click
+        frames: { len: 6 }
+      },
+      break: {
+        wave: "noise",
+        adsr: [0, 10, 0, 8],
+        pitch: { startFreq: 800, slide: -40 },
+        filter: { cutoff: 0.7, sweep: -0.04, res: 6, mode: "lp" }, // Crumbling block collapse/fracture crash
+        frames: { len: 18 }
+      },
+      respawn: {
+        wave: "pulse",
+        adsr: [1, 4, 10, 4],
+        pitch: { startFreq: 261.63 },
+        arp: { offsets: [0, 3, 7, 12, 15, 19, 24], speed: 3 }, // Uplifting minor-to-major retro chiptune melody
+        pw: { start: 2048, speed: 100 },
+        frames: { len: 25 }
+      },
+      complete: {
+        wave: "triangle+pulse",
+        adsr: [2, 6, 12, 8],
+        pitch: { startFreq: 261.63 },
+        arp: { offsets: [0, 4, 7, 12, 16, 19, 24, 28, 31, 36, 40], speed: 3 }, // Grand victory fanfare chord run
+        pw: { start: 2048, speed: 100 },
+        frames: { len: 55 }
+      },
+      damage: {
+        wave: "sawtooth+noise",
+        adsr: [1, 12, 0, 8],
+        pitch: { startFreq: 220, slide: -6 },
+        filter: { cutoff: 0.7, sweep: -0.02, res: 10, mode: "lp" }, // Glitchy, detuned painful hazard collision hit
+        frames: { len: 24 }
+      },
+      gameOver: {
+        wave: "square",
+        adsr: [3, 8, 4, 6],
+        pitch: { startFreq: 392.00 },
+        arp: { offsets: [0, -2, -4, -5, -7, -9, -11, -12], speed: 6 }, // Tragic, heavy descending game over minor run
+        frames: { len: 50 }
+      },
+      linkSuccess: {
+        wave: "triangle",
+        adsr: [1, 3, 6, 3],
+        pitch: { startFreq: 880 },
+        arp: { offsets: [0, 5, 12, 17], speed: 2 }, // Satisfying chord when links are built
+        frames: { len: 14 }
+      },
+      linkCancel: {
+        wave: "sawtooth",
+        adsr: [1, 6, 0, 3],
+        pitch: { startFreq: 150, slide: -5 }, // Low warning buzz for linking failures
+        frames: { len: 10 }
+      },
+      starEarned: {
+        wave: "pulse",
+        adsr: [1, 8, 4, 6],
+        pitch: { startFreq: 523.25 },
+        arp: { offsets: [0, 4, 7, 12, 16], speed: 2 }, // Sparkling chime for collecting levels stars
+        pw: { start: 2048, speed: 150 },
+        frames: { len: 22 }
+      },
+      groupStart: {
+        wave: "triangle",
+        adsr: [1, 5, 4, 3],
+        pitch: { startFreq: 330 },
+        arp: { offsets: [0, 5, 10], speed: 3 }, // Creative high-tech group initialization chime
+        frames: { len: 12 }
+      },
+      groupEnd: {
+        wave: "triangle",
+        adsr: [1, 5, 4, 3],
+        pitch: { startFreq: 660 },
+        arp: { offsets: [0, -5, -10], speed: 3 }, // Secure high-tech group finalized locking blip
+        frames: { len: 12 }
+      },
+      undo: {
+        wave: "triangle",
+        adsr: [1, 6, 0, 3],
+        pitch: { startFreq: 200, slide: 25 }, // "Temporal rewind" ascending sweep
+        frames: { len: 10 }
+      },
+      clear: {
+        wave: "noise",
+        adsr: [2, 12, 0, 8],
+        pitch: { startFreq: 800, slide: -60 },
+        filter: { cutoff: 0.8, sweep: -0.06, res: 8, mode: "lp" }, // Digital black-hole grid-wiping sweep
+        frames: { len: 22 }
+      },
+      playtestEnter: {
+        wave: "square",
+        adsr: [2, 5, 3, 4],
+        pitch: { startFreq: 330 },
+        arp: { offsets: [0, 4, 7, 12], speed: 3 }, // Game start playtest countdown signature
+        frames: { len: 15 }
+      },
+      playtestExit: {
+        wave: "sawtooth",
+        adsr: [1, 5, 3, 4],
+        pitch: { startFreq: 523.25 },
+        arp: { offsets: [0, -4, -7, -12], speed: 3 }, // Exiting playtest return-to-editor signature
+        frames: { len: 15 }
+      },
+      balance: {
+        wave: "triangle",
+        adsr: [3, 4, 15, 4],
+        pitch: { startFreq: 220 },
+        vibrato: { speed: 0.25, depth: 10 }, // Ongoing wobbly balancing hum
+        frames: { len: 9999 }
+      },
+
+      // --- NEWLY ADDED CREATIVE SOUNDS (29 SOUNDS) ---
+      // Editor placement signatures
+      place_normal: {
+        wave: "triangle",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 180, slide: -15 },
+        frames: { len: 5 }
+      },
+      place_fragile: {
+        wave: "triangle",
+        adsr: [0, 5, 0, 2],
+        pitch: { startFreq: 280, slide: -25 },
+        frames: { len: 6 }
+      },
+      place_ice: {
+        wave: "triangle",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 1200, slide: -60 },
+        frames: { len: 5 }
+      },
+      place_switch: {
+        wave: "pulse",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 400, slide: 30 },
+        pw: { start: 1024, speed: 100 },
+        frames: { len: 6 }
+      },
+      place_bridge: {
+        wave: "triangle",
+        adsr: [1, 5, 0, 2],
+        pitch: { startFreq: 220, slide: -10 },
+        frames: { len: 7 }
+      },
+      place_teleporter: {
+        wave: "sawtooth",
+        adsr: [2, 6, 0, 3],
+        pitch: { startFreq: 150, slide: 50 },
+        frames: { len: 10 }
+      },
+      place_moving: {
+        wave: "pulse",
+        adsr: [0, 5, 0, 2],
+        pitch: { startFreq: 300, slide: -20 },
+        pw: { start: 2048, speed: 50 },
+        frames: { len: 6 }
+      },
+      place_pushable: {
+        wave: "triangle",
+        adsr: [0, 6, 0, 3],
+        pitch: { startFreq: 140, slide: -8 },
+        frames: { len: 8 }
+      },
+      place_pressureplate: {
+        wave: "pulse",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 600, slide: -40 },
+        pw: { start: 1024, speed: 50 },
+        frames: { len: 5 }
+      },
+      place_danger: {
+        wave: "noise",
+        adsr: [0, 6, 0, 4],
+        pitch: { startFreq: 500, slide: -20 },
+        frames: { len: 8 }
+      },
+      place_shaker: {
+        wave: "triangle",
+        adsr: [1, 6, 0, 3],
+        pitch: { startFreq: 250, slide: -15 },
+        frames: { len: 8 }
+      },
+      place_booster: {
+        wave: "sawtooth",
+        adsr: [1, 4, 0, 2],
+        pitch: { startFreq: 350, slide: 40 },
+        frames: { len: 6 }
+      },
+      place_start: {
+        wave: "triangle",
+        adsr: [0, 4, 8, 4],
+        pitch: { startFreq: 440 },
+        arp: { offsets: [0, 4, 7, 12], speed: 2 },
+        frames: { len: 10 }
+      },
+      place_exit: {
+        wave: "pulse",
+        adsr: [1, 4, 8, 4],
+        pitch: { startFreq: 523 },
+        arp: { offsets: [0, 7, 12, 19], speed: 2 },
+        pw: { start: 2048, speed: 100 },
+        frames: { len: 12 }
+      },
+      place_prism: {
+        wave: "pulse",
+        adsr: [0, 3, 6, 3],
+        pitch: { startFreq: 880 },
+        arp: { offsets: [0, 12], speed: 2 },
+        frames: { len: 6 }
+      },
+      place_miniprism: {
+        wave: "pulse",
+        adsr: [0, 3, 6, 3],
+        pitch: { startFreq: 1200 },
+        arp: { offsets: [0, 12], speed: 2 },
+        frames: { len: 6 }
+      },
+      place_enemy: {
+        wave: "sawtooth",
+        adsr: [1, 5, 0, 3],
+        pitch: { startFreq: 180, slide: -15 },
+        frames: { len: 8 }
+      },
+      // X-ray toggle chiptune sweep
+      xrayToggle: {
+        wave: "sawtooth",
+        adsr: [1, 5, 0, 4],
+        pitch: { startFreq: 1000, slide: -80 },
+        filter: { cutoff: 0.8, sweep: -0.05, res: 10, mode: "bp" },
+        frames: { len: 10 }
+      },
+      // Pause toggle audio cue
+      pauseToggle: {
+        wave: "triangle",
+        adsr: [2, 6, 0, 4],
+        pitch: { startFreq: 330, slide: -20 },
+        frames: { len: 12 }
+      },
+      // Shaker block shaking
+      shakerShake: {
+        wave: "triangle+noise",
+        adsr: [0, 8, 0, 6],
+        pitch: { startFreq: 90, slide: -2 },
+        vibrato: { speed: 0.8, depth: 8 },
+        frames: { len: 15 }
+      },
+      // Bridge extending/retracting
+      bridgeExtend: {
+        wave: "pulse",
+        adsr: [2, 6, 4, 4],
+        pitch: { startFreq: 300, slide: 15 },
+        pw: { start: 1024, speed: 80 },
+        frames: { len: 12 }
+      },
+      bridgeRetract: {
+        wave: "pulse",
+        adsr: [1, 6, 0, 4],
+        pitch: { startFreq: 400, slide: -20 },
+        pw: { start: 2048, speed: -80 },
+        frames: { len: 10 }
+      },
+      // Crate physics sounds
+      cratePush: {
+        wave: "triangle",
+        adsr: [0, 6, 0, 4],
+        pitch: { startFreq: 100, slide: -5 },
+        frames: { len: 8 }
+      },
+      crateLand: {
+        wave: "triangle+noise",
+        adsr: [0, 8, 0, 4],
+        pitch: { startFreq: 80, slide: -3 },
+        frames: { len: 10 }
+      },
+      crateFall: {
+        wave: "sawtooth",
+        adsr: [3, 15, 0, 10],
+        pitch: { startFreq: 180, slide: -4 },
+        frames: { len: 25 }
+      },
+      // Pressure plates pressed/released
+      platePress: {
+        wave: "pulse",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 500, slide: 30 },
+        pw: { start: 1024, speed: 50 },
+        frames: { len: 6 }
+      },
+      plateRelease: {
+        wave: "pulse",
+        adsr: [0, 4, 0, 2],
+        pitch: { startFreq: 650, slide: -30 },
+        pw: { start: 1024, speed: 50 },
+        frames: { len: 6 }
+      },
+      // Dynamic combo scoring reward
+      combo: {
+        wave: "pulse",
+        adsr: [0, 3, 6, 3],
+        pitch: { startFreq: 523.25 },
+        arp: { offsets: [0, 4, 7, 12], speed: 1 },
+        pw: { start: 1500, speed: 200 },
+        frames: { len: 10 }
+      },
+      // AI generators successful load signature
+      aiGenerate: {
+        wave: "triangle+pulse",
+        adsr: [3, 6, 8, 6],
+        pitch: { startFreq: 220 },
+        arp: { offsets: [0, 4, 7, 12, 16, 19, 24], speed: 2 },
+        frames: { len: 35 }
+      }
+    };
+  }
 
   playRoll() {
-    if (!this.ready) return;
-    const t = this._now();
-    const len = this.ctx.sampleRate * 0.05;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
-    const noise = this.ctx.createBufferSource(); noise.buffer = buf;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'bandpass'; filt.frequency.value = 700 + Math.random()*500; filt.Q.value = 0.6;
-    const ng = this.ctx.createGain();
-    ng.gain.setValueAtTime(0.2, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t+0.05);
-    noise.connect(filt); filt.connect(ng); ng.connect(this.master);
-    noise.start(t); noise.stop(t+0.06);
-
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.value = 85 + Math.random()*35;
-    const og = this.ctx.createGain();
-    og.gain.setValueAtTime(0.4, t);
-    og.gain.exponentialRampToValueAtTime(0.001, t+0.07);
-    osc.connect(og); og.connect(this.master);
-    osc.start(t); osc.stop(t+0.08);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('roll');
   }
 
   playIce() {
-    if (!this.ready) return;
-    const t = this._now();
-    const len = this.ctx.sampleRate * 0.08;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
-    const noise = this.ctx.createBufferSource(); noise.buffer = buf;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'highpass'; filt.frequency.value = 2000;
-    const ng = this.ctx.createGain();
-    ng.gain.setValueAtTime(0.12, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t+0.08);
-    noise.connect(filt); filt.connect(ng); ng.connect(this.master);
-    noise.start(t); noise.stop(t+0.09);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('ice');
   }
 
   playBalanceStart() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = 200;
-    const lfo = this.ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 7;
-    const lfoG = this.ctx.createGain(); lfoG.gain.value = 60;
-    lfo.connect(lfoG); lfoG.connect(osc.frequency);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.12, t+0.15);
-    gain.gain.linearRampToValueAtTime(0.22, t+0.5);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); lfo.start(t);
-    this._balanceNodes = { osc, lfo, gain };
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    // Play on dedicated voice 2 to allow stopping it via poke
+    this.sid.playSfx('balance', { voice: 2 });
   }
 
   playBalanceStop() {
-    if (!this._balanceNodes) return;
-    const t = this._now();
-    const { osc, lfo, gain } = this._balanceNodes;
-    gain.gain.linearRampToValueAtTime(0, t+0.1);
-    osc.stop(t+0.15); lfo.stop(t+0.15);
-    this._balanceNodes = null;
+    if (!this.ready || !this.sid) return;
+    this.sid.poke(2, 'gate', false);
   }
 
   playFall() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(400, t);
-    osc.frequency.exponentialRampToValueAtTime(60, t+0.45);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.5);
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'lowpass'; filt.frequency.setValueAtTime(1500, t);
-    filt.frequency.exponentialRampToValueAtTime(200, t+0.4);
-    osc.connect(filt); filt.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.55);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('fall');
     this.playBalanceStop();
   }
 
   playLand() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'triangle';
-    osc.frequency.setValueAtTime(120, t);
-    osc.frequency.exponentialRampToValueAtTime(35, t+0.18);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.35, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.2);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.22);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('land');
   }
 
   playShrink() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.setValueAtTime(350, t);
-    osc.frequency.exponentialRampToValueAtTime(1000, t+0.2);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.22);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.24);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('shrink');
   }
 
   playGrow() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.setValueAtTime(800, t);
-    osc.frequency.exponentialRampToValueAtTime(250, t+0.25);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.27);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.3);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('grow');
   }
 
   playCollect() {
-    if (!this.ready) return;
-    const t = this._now();
-    const freqs = [880, 1108, 1320];
-    freqs.forEach((f,i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.18, t + i*0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.04 + 0.35);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t + i*0.04); osc.stop(t + i*0.04 + 0.4);
-    });
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('collect');
   }
 
   playSwitch() {
-    if (!this.ready) return;
-    const t = this._now();
-    [600, 900].forEach((f,i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'square'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.1, t + i*0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.04 + 0.1);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t + i*0.04); osc.stop(t + i*0.04 + 0.12);
-    });
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('switch');
   }
 
   playTeleport() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'sine';
-    osc.frequency.setValueAtTime(200, t);
-    osc.frequency.exponentialRampToValueAtTime(1200, t+0.15);
-    osc.frequency.exponentialRampToValueAtTime(800, t+0.25);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.2, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.3);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.35);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('teleport');
   }
 
   playBreak() {
-    if (!this.ready) return;
-    const t = this._now();
-    const len = this.ctx.sampleRate * 0.12;
-    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i=0;i<len;i++) d[i] = Math.random()*2-1;
-    const noise = this.ctx.createBufferSource(); noise.buffer = buf;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = 'lowpass'; filt.frequency.setValueAtTime(800, t);
-    filt.frequency.exponentialRampToValueAtTime(100, t+0.12);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t+0.15);
-    noise.connect(filt); filt.connect(gain); gain.connect(this.master);
-    noise.start(t); noise.stop(t+0.16);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('break');
   }
 
   playRespawn() {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'triangle';
-    osc.frequency.setValueAtTime(150, t);
-    osc.frequency.exponentialRampToValueAtTime(300, t+0.15);
-    osc.frequency.exponentialRampToValueAtTime(200, t+0.3);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, t);
-    gain.gain.linearRampToValueAtTime(0, t+0.35);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t+0.4);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('respawn');
   }
 
   playComplete() {
-    if (!this.ready) return;
-    const t = this._now();
-    const notes = [523, 659, 784, 1047];
-    notes.forEach((f,i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      const st = t + i*0.12;
-      gain.gain.setValueAtTime(0.02, st);
-      gain.gain.linearRampToValueAtTime(0.2, st+0.04);
-      gain.gain.exponentialRampToValueAtTime(0.001, st+0.7);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(st); osc.stop(st+0.75);
-    });
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('complete');
   }
 
-  // ── Editor: compound-object grouping cues ──
+  playBooster() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('booster');
+  }
+
+  playLeap() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('leap');
+  }
+
+  playEnemyRoll() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('enemyRoll');
+  }
+
+  playDamage() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('damage');
+  }
+
+  playGameOver() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('gameOver');
+  }
+
+  playLinkSuccess() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('linkSuccess');
+  }
+
+  playLinkCancel() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('linkCancel');
+  }
+
+  playHeightChange(isUp) {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx(isUp ? 'heightChangeUp' : 'heightChangeDown');
+  }
+
+  playClick() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('click');
+  }
+
+  playStarEarned(index) {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    const notes = [523.25, 659.25, 783.99];
+    const f = notes[index % 3];
+    this.sid.playSfx('starEarned', { pitch: { startFreq: f } });
+  }
+
+  playTypewriterTick() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('typewriterTick');
+  }
+
   playGroupStart() {
-    if (!this.ready) return;
-    const t = this._now();
-    [440, 660].forEach((f, i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.0001, t + i*0.06);
-      gain.gain.exponentialRampToValueAtTime(0.16, t + i*0.06 + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.06 + 0.22);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t + i*0.06); osc.stop(t + i*0.06 + 0.25);
-    });
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('groupStart');
   }
 
-  // A short tick when a block joins the group; pitch climbs with the count.
   playGroupAdd(count = 1) {
-    if (!this.ready) return;
-    const t = this._now();
-    const osc = this.ctx.createOscillator(); osc.type = 'square';
-    osc.frequency.value = Math.min(1500, 660 + (count - 1) * 80);
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.12, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-    osc.connect(gain); gain.connect(this.master);
-    osc.start(t); osc.stop(t + 0.1);
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    const startF = Math.min(1500, 660 + (count - 1) * 80);
+    this.sid.playSfx('groupAdd', { pitch: { startFreq: startF } });
   }
 
   playGroupEnd() {
-    if (!this.ready) return;
-    const t = this._now();
-    [660, 440].forEach((f, i) => {
-      const osc = this.ctx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = f;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.0001, t + i*0.05);
-      gain.gain.exponentialRampToValueAtTime(0.14, t + i*0.05 + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.05 + 0.18);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t + i*0.05); osc.stop(t + i*0.05 + 0.2);
-    });
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('groupEnd');
+  }
+
+  // ── Level Editor Sound Effects ──────────────────────────
+  playToolSelect() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('toolSelect');
+  }
+
+  playUndo() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('undo');
+  }
+
+  playClear() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('clear');
+  }
+
+  playPlaytestEnter() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('playtestEnter');
+  }
+
+  playPlaytestExit() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('playtestExit');
+  }
+
+  // ── New Play Methods ─────────────────────────────────────
+  playXrayToggle(isOn) {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('xrayToggle', { pitch: { startFreq: isOn ? 1200 : 800 }, pitch: { slide: isOn ? -60 : -40 } });
+  }
+
+  playPauseToggle(isPaused) {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('pauseToggle', { pitch: { startFreq: isPaused ? 300 : 440 } });
+  }
+
+  playShakerShake() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('shakerShake');
+  }
+
+  playBridgeExtend() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('bridgeExtend');
+  }
+
+  playBridgeRetract() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('bridgeRetract');
+  }
+
+  playCratePush() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('cratePush');
+  }
+
+  playCrateLand() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('crateLand');
+  }
+
+  playCrateFall() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('crateFall');
+  }
+
+  playPlatePress() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('platePress');
+  }
+
+  playPlateRelease() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('plateRelease');
+  }
+
+  playCombo(comboCount) {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    // Scale pitch upward depending on combo size
+    const baseFreq = 523.25 * Math.pow(1.12, comboCount - 2);
+    this.sid.playSfx('combo', { pitch: { startFreq: baseFreq } });
+  }
+
+  playAIGenerate() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('aiGenerate');
+  }
+
+  playPlace(tool) {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    const sfxName = `place_${tool}`;
+    if (this.sid.sfxBank[sfxName]) {
+      this.sid.playSfx(sfxName);
+    } else {
+      this.sid.playSfx('click');
+    }
   }
 
   startAmbient(worldIdx) {
-    if (!this.ready) return;
-    this.stopAmbient();
-    const t = this._now();
-    const baseFreq = [55, 65, 73, 82, 98][worldIdx % 5];
-    [1, 1.005, 2, 2.01, 3, 3.005].forEach(ratio => {
-      const osc = this.ctx.createOscillator(); osc.type = 'sine';
-      osc.frequency.value = baseFreq * ratio;
-      const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.03, t+1);
-      osc.connect(gain); gain.connect(this.master);
-      osc.start(t);
-      this._ambientOscs.push({ osc, gain });
-    });
+    // Background ambient sound deleted per user request
+    return;
   }
 
   stopAmbient() {
-    if (!this.ready) return;
-    const t = this._now();
-    this._ambientOscs.forEach(({ osc, gain }) => {
-      gain.gain.linearRampToValueAtTime(0, t+0.5);
-      osc.stop(t+0.6);
-    });
-    this._ambientOscs = [];
+    // Background ambient sound deleted per user request
+    return;
   }
 }

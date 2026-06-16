@@ -13,6 +13,7 @@ export class Level3D {
     this.prisms = new Map(); // key "x,y,z" -> {type}
     this.enemies = new Map(); // key "x,y,z" -> {} (rainbow chaser spawn points)
     this.links = []; // Trigger links: {type, from, to} / {type, k1, k2}
+    this.buildBlocksLimit = 10;
   }
 }
 
@@ -191,7 +192,8 @@ export function serializeLevel(level3D) {
     name: level3D.name, world: level3D.world, par: level3D.par,
     start: [level3D.start.x, level3D.start.y, level3D.start.z],
     exit: [level3D.exit.x, level3D.exit.y, level3D.exit.z],
-    blocks, prisms, enemies, links: level3D.links
+    blocks, prisms, enemies, links: level3D.links,
+    buildBlocksLimit: level3D.buildBlocksLimit ?? 10
   });
 }
 
@@ -204,6 +206,7 @@ export function deserializeLevel(jsonStr) {
   lvl.par = data.par ?? 10;
   lvl.start = { x:data.start[0], y:data.start[1], z:data.start[2] };
   lvl.exit = { x:data.exit[0], y:data.exit[1], z:data.exit[2] };
+  lvl.buildBlocksLimit = data.buildBlocksLimit ?? 10;
   data.blocks.forEach(arr => {
     lvl.blocks.set(`${arr[0]},${arr[1]},${arr[2]}`, { x:arr[0], y:arr[1], z:arr[2], type:arr[3], properties:arr[4] || {} });
   });

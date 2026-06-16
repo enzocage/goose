@@ -68,6 +68,7 @@ const MOVE_REPEAT_MS = 300;
 let rollStartGridPos = { x:0, y:0, z:0 };
 let boosterMovesActive = 0;
 let moveCount = 0;
+let placedBlocksCount = 0;
 let gameTimer = 0;
 let comboCount = 0;
 let comboTimer = 0;
@@ -97,6 +98,7 @@ let rollCarrierStart = new THREE.Vector3();
 const particles = [];
 const trailParts = [];
 let trailTimer = 0;
+let completeAnimStartTime = 0;
 
 /* ═══ ENEMY STATE ═══ */
 // Enemies are placed in the editor (Level3D.enemies) and may appear multiple
@@ -106,8 +108,8 @@ let enemyMarkers = new Map();  // key -> mesh, static markers shown in pure edit
 const ENEMY_MOVE_INTERVAL = 0.38;
 
 /* ═══ LIVES STATE ═══ */
-let playerLives = 3;
-const MAX_LIVES = 3;
+let playerLives = 5;
+const MAX_LIVES = 5;
 let playerInvincible = false;
 let playerInvincibleTimer = 0;
 const PLAYER_INVINCIBLE_DURATION = 2.2;
@@ -175,6 +177,11 @@ function clearLevel() {
   switchStates.clear();
   linkerSourceKey = null;
   currentGroupId = null;
+  completeAnimStartTime = 0;
+  if (typeof starfield !== 'undefined' && starfield) {
+    starfield.scale.setScalar(1.0);
+    starfield.rotation.set(0, 0, 0);
+  }
   // A rebuild (level change / restart) clears any active pause.
   if (isPaused) { isPaused = false; document.getElementById('pause-overlay')?.classList.remove('show'); }
   pausePointers.clear(); pausePinchDist = null;
@@ -305,9 +312,13 @@ function buildLevel3D(level3D) {
   isRolling = false; isBalancing = false; isTeleporting = false; isFalling = false; isLevelComplete = false;
 
   document.getElementById('world-name').textContent = world.name.toUpperCase();
-  document.getElementById('level-name').textContent = level3D.name;
+  playTypewriterTitle(document.getElementById('level-name'), level3D.name);
   document.getElementById('level-number').textContent = isEditMode ? 'E' : (isCustomLevel ? 'C' : currentLevelIdx + 1);
-  updatePrismUI(); updateMoveUI(); updateTimerUI();
+  placedBlocksCount = 0;
+  updatePrismUI(); updateMoveUI(); updateTimerUI(); updateBuildUI();
+  if (document.getElementById('level-build-limit-input')) {
+    document.getElementById('level-build-limit-input').value = level3D.buildBlocksLimit ?? 10;
+  }
   document.getElementById('mini-hud-bar').style.display = 'none';
 
   spawnEntranceParticles(playerGridPos.x, playerGridPos.y, playerGridPos.z);
@@ -341,6 +352,9 @@ function createBlockMesh(block, key) {
   // Thin bridge visual
   const geo = type === 'bridge' ? geoThinTile : geoTile;
   const mesh = new THREE.Mesh(geo, mat.clone());
+  mesh.material.transparent = true;
+  mesh.material.opacity = 1.0;
+  mesh.material.depthWrite = true;
   mesh.position.set(x, type === 'bridge' ? y + 0.4 : y, z);
   mesh.castShadow = true; mesh.receiveShadow = true;
   mesh.userData = { key, type };
@@ -363,15 +377,19 @@ function createBlockMesh(block, key) {
   const line = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color:eColor, transparent:true, opacity:0.35 }));
   mesh.add(line);
   if (isInactiveBridge) {
-    mesh.material.transparent = true;
     mesh.material.opacity = 0.18;
+    mesh.material.depthWrite = false;
   }
   tilesGroup.add(mesh);
   block.mesh = mesh;
 
   // Switch pillar
   if (type === 'switch') {
-    const pillar = new THREE.Mesh(geoPillar, matSwitchPillar.clone());
+    const pillarMat = matSwitchPillar.clone();
+    pillarMat.transparent = true;
+    pillarMat.opacity = 1.0;
+    pillarMat.depthWrite = true;
+    const pillar = new THREE.Mesh(geoPillar, pillarMat);
     pillar.position.set(0, 0.5 + 0.17, 0);
     pillar.castShadow = true;
     mesh.add(pillar);
@@ -381,7 +399,8 @@ function createBlockMesh(block, key) {
   // Pressure plate button visual
   if (type === 'pressureplate') {
     const plateGeo = new THREE.BoxGeometry(0.8, 0.05, 0.8);
-    const plate = new THREE.Mesh(plateGeo, new THREE.MeshStandardMaterial({ color:'#3366ff', roughness:0.2, metalness:0.3, emissive:'#3366ff', emissiveIntensity:0.5 }));
+    const plateMat = new THREE.MeshStandardMaterial({ color:'#3366ff', roughness:0.2, metalness:0.3, emissive:'#3366ff', emissiveIntensity:0.5, transparent:true, opacity:1.0, depthWrite:true });
+    const plate = new THREE.Mesh(plateGeo, plateMat);
     plate.position.set(0, 0.5 + 0.025, 0);
     plate.castShadow = true;
     mesh.add(plate);
@@ -393,7 +412,8 @@ function createBlockMesh(block, key) {
     for (let i = -1; i <= 1; i += 2) {
       for (let j = -1; j <= 1; j += 2) {
         const spikeGeo = new THREE.ConeGeometry(0.08, 0.28, 4);
-        const spike = new THREE.Mesh(spikeGeo, new THREE.MeshStandardMaterial({ color:'#ff3355', roughness:0.5, metalness:0.1, emissive:'#ff3355', emissiveIntensity:1.0 }));
+        const spikeMat = new THREE.MeshStandardMaterial({ color:'#ff3355', roughness:0.5, metalness:0.1, emissive:'#ff3355', emissiveIntensity:1.0, transparent:true, opacity:1.0, depthWrite:true });
+        const spike = new THREE.Mesh(spikeGeo, spikeMat);
         spike.position.set(i*0.25, 0.5 + 0.14, j*0.25);
         spike.castShadow = true;
         mesh.add(spike);
@@ -404,7 +424,8 @@ function createBlockMesh(block, key) {
   // Booster arrow visual
   if (type === 'booster') {
     const arrowGeo = new THREE.ConeGeometry(0.25, 0.5, 4);
-    const arrow = new THREE.Mesh(arrowGeo, new THREE.MeshStandardMaterial({ color:'#ffcc00', roughness:0.1, metalness:0.1, emissive:'#ffcc00', emissiveIntensity:1.5 }));
+    const arrowMat = new THREE.MeshStandardMaterial({ color:'#ffcc00', roughness:0.1, metalness:0.1, emissive:'#ffcc00', emissiveIntensity:1.5, transparent:true, opacity:1.0, depthWrite:true });
+    const arrow = new THREE.Mesh(arrowGeo, arrowMat);
     arrow.rotation.x = Math.PI/2;
     arrow.position.set(0, 0.5 + 0.05, 0);
     mesh.add(arrow);
@@ -527,6 +548,41 @@ function spawnTeleportParticles(gx, gy, gz) {
   }
 }
 
+function spawnLevelCompleteExplosion() {
+  const colors = ['#ff0055', '#00ffaa', '#ffaa00', '#00ccff', '#ff00ff', '#ffff00', '#ffffff'];
+  const pos = new THREE.Vector3(exitPos.x, exitPos.y + 0.5, exitPos.z);
+  for (let i = 0; i < 120; i++) {
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const mat = new THREE.MeshBasicMaterial({
+      color: color,
+      transparent: true,
+      opacity: 1.0,
+      blending: THREE.AdditiveBlending
+    });
+    const geo = new THREE.OctahedronGeometry(0.08 + Math.random() * 0.08, 0);
+    const p = new THREE.Mesh(geo, mat);
+    p.position.copy(pos);
+    
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const speed = 4 + Math.random() * 7;
+    const vel = new THREE.Vector3(
+      Math.sin(phi) * Math.cos(theta) * speed,
+      Math.sin(phi) * Math.sin(theta) * speed + 2,
+      Math.cos(phi) * speed
+    );
+    
+    p.userData = {
+      vel: vel,
+      life: 1.5 + Math.random() * 1.0,
+      age: 0,
+      spin: new THREE.Vector3(Math.random() * 10, Math.random() * 10, Math.random() * 10)
+    };
+    effectsGroup.add(p);
+    particles.push(p);
+  }
+}
+
 function spawnTrailParticle() {
   if (!playerCube) return;
   const p = new THREE.Mesh(geoTrail, new THREE.MeshBasicMaterial({ color:'#ff8844', transparent:true, opacity:0.5 }));
@@ -575,6 +631,23 @@ function showMessage(text, dur=2) {
   const el = document.getElementById('message');
   el.textContent = text; el.classList.add('visible');
   clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('visible'), dur*1000);
+}
+
+let typewriterInterval = null;
+function playTypewriterTitle(el, text) {
+  if (typewriterInterval) clearInterval(typewriterInterval);
+  el.textContent = '';
+  let i = 0;
+  typewriterInterval = setInterval(() => {
+    if (i < text.length) {
+      el.textContent += text[i];
+      audio.playTypewriterTick();
+      i++;
+    } else {
+      clearInterval(typewriterInterval);
+      typewriterInterval = null;
+    }
+  }, 45);
 }
 
 // ── Compound-object grouping indicator (active while O is held) ──
@@ -714,7 +787,7 @@ function executePush(block, toX, toY, toZ, dirX, dirZ) {
     
     const slideDur = 0.15;
     const startTime = performance.now()/1000;
-    audio.playIce();
+    audio.playCratePush();
     
     const animatePush = () => {
       const elapsed = performance.now()/1000 - startTime;
@@ -732,10 +805,11 @@ function executePush(block, toX, toY, toZ, dirX, dirZ) {
             if (mesh.position.y <= finalY) {
               if (finalY > -5) {
                 mesh.position.copy(finalPos);
-                audio.playLand();
+                audio.playCrateLand();
                 spawnLandingParticles(toX, finalY, toZ);
                 updatePressurePlates();
               } else {
+                audio.playCrateFall();
                 tilesGroup.remove(mesh);
                 if (mesh.material) mesh.material.dispose();
               }
@@ -771,7 +845,11 @@ function updatePressurePlates() {
 
       if (shouldBeActive !== isCurrentlyActive) {
         switchStates.set(key, shouldBeActive);
-        audio.playSwitch();
+        if (shouldBeActive) {
+          audio.playPlatePress();
+        } else {
+          audio.playPlateRelease();
+        }
         if (block.mesh && block.plateMesh) {
           block.plateMesh.material.emissive.set(shouldBeActive ? '#00ff88' : '#3366ff');
           block.plateMesh.position.y = shouldBeActive ? 0.5 + 0.005 : 0.5 + 0.025;
@@ -785,6 +863,12 @@ function updatePressurePlates() {
 function triggerSwitchTargets(key, activeState) {
   const targets = switchMap.get(key);
   if (!targets) return;
+
+  if (activeState) {
+    audio.playBridgeExtend();
+  } else {
+    audio.playBridgeRetract();
+  }
 
   targets.forEach(tk => {
     const block = activeBlocks.get(tk);
@@ -843,7 +927,7 @@ function executeRollBack() {
 
 function triggerShakerCrumble(block, key) {
   const originalPos = block.mesh.position.clone();
-  audio.playIce(); // shaking crack sound
+  audio.playShakerShake(); // shaking crack sound
   
   const shakeInterval = setInterval(() => {
     if (!block.mesh || block.broken) {
@@ -1011,7 +1095,14 @@ function executeRoll(toGX, targetY, toGZ, dirX, dirZ, action) {
 
   // Combo
   const sameDir = (dirX === lastMoveDir.x && dirZ === lastMoveDir.z);
-  if (sameDir && comboTimer > 0) comboCount++; else comboCount = 1;
+  if (sameDir && comboTimer > 0) {
+    comboCount++;
+    if (comboCount >= 3) {
+      audio.playCombo(comboCount);
+    }
+  } else {
+    comboCount = 1;
+  }
   comboTimer = COMBO_TIMEOUT;
   lastMoveDir = { x:dirX, z:dirZ };
   updateComboUI();
@@ -1053,6 +1144,11 @@ function onRollComplete() {
     isFalling = true;
     fallVelY = 0;
     playerCube.userData.fallTargetY = targetY;
+    if (action === 'fall') {
+      audio.playLeap();
+    } else {
+      audio.playFall();
+    }
     return;
   }
 
@@ -1073,7 +1169,7 @@ function onRollComplete() {
     
     // Danger block death
     if (block.type === 'danger') {
-      audio.playFall();
+      audio.playDamage();
       respawnPlayer();
       return;
     }
@@ -1082,7 +1178,7 @@ function onRollComplete() {
     if (block.type === 'booster') {
       boosterMovesActive = 4;
       showMessage('SPEED BOOST ACTIVE (4 MOVES)!', 1.5);
-      audio.playCollect();
+      audio.playBooster();
     }
     
     // Shaker block crumble trigger
@@ -1296,13 +1392,36 @@ function checkLevelComplete() {
 function completeLevel() {
   isLevelComplete = true;
   audio.playComplete();
+  spawnLevelCompleteExplosion();
+  completeAnimStartTime = performance.now() / 1000;
 
   const stars = moveCount <= activeLevel.par ? 3 : (moveCount <= activeLevel.par * 1.5 ? 2 : 1);
   document.getElementById('complete-overlay').classList.add('show');
   document.getElementById('complete-text').textContent = isEditMode ? 'PLAYTEST COMPLETE' : `LEVEL ${currentLevelIdx+1} CLEAR`;
-  document.getElementById('star1').classList.toggle('earned', stars >= 1);
-  document.getElementById('star2').classList.toggle('earned', stars >= 2);
-  document.getElementById('star3').classList.toggle('earned', stars >= 3);
+  
+  // Clean stars before sequence starts
+  document.getElementById('star1').classList.remove('earned');
+  document.getElementById('star2').classList.remove('earned');
+  document.getElementById('star3').classList.remove('earned');
+
+  if (stars >= 1) {
+    setTimeout(() => {
+      document.getElementById('star1').classList.add('earned');
+      audio.playStarEarned(0);
+    }, 450);
+  }
+  if (stars >= 2) {
+    setTimeout(() => {
+      document.getElementById('star2').classList.add('earned');
+      audio.playStarEarned(1);
+    }, 900);
+  }
+  if (stars >= 3) {
+    setTimeout(() => {
+      document.getElementById('star3').classList.add('earned');
+      audio.playStarEarned(2);
+    }, 1350);
+  }
 
   setTimeout(() => {
     document.getElementById('complete-overlay').classList.remove('show');
@@ -1662,7 +1781,9 @@ function generateArchitectLevel3(opts) {
   }
 
   const world = clamp(Math.floor((size - 1) / 2), 0, 4);
-  return buildArchitect(P, `Architect3 · Lvl ${size}`, world);
+  const lvl = buildArchitect(P, `Architect3 · Lvl ${size}`, world);
+  lvl.buildBlocksLimit = opts.buildLimit !== undefined ? opts.buildLimit : 10;
+  return lvl;
 }
 
 // Shared Architect builder: turns a fully-resolved parameter set into a
@@ -2030,6 +2151,7 @@ function editorUndo() {
   renderVerticalRuler();
   updateUndoButton();
   showMessage(`UNDO — ${undoStack.length} STEP${undoStack.length === 1 ? '' : 'S'} LEFT`, 1);
+  audio.playUndo();
 }
 
 function updateUndoButton() {
@@ -2137,8 +2259,9 @@ function updateEditorSlicing() {
     activeBlocks.forEach(b => {
       if (b.mesh) {
         b.mesh.visible = true;
-        b.mesh.material.transparent = b.type === 'bridge';
-        b.mesh.material.opacity = b.type === 'bridge' ? 0.4 : 1.0;
+        const baseOpacity = b.type === 'bridge' ? 0.4 : 1.0;
+        b.mesh.material.opacity = baseOpacity;
+        b.mesh.material.depthWrite = (baseOpacity === 1.0);
       }
       if (b.pillar) b.pillar.visible = true;
     });
@@ -2161,11 +2284,11 @@ function updateEditorSlicing() {
       if (b.pillar) b.pillar.visible = true;
       const baseOpacity = b.type === 'bridge' ? (b.active === false ? 0.18 : 0.4) : 1.0;
       if (b.y < editY) {
-        b.mesh.material.transparent = true;
         b.mesh.material.opacity = Math.min(0.4, baseOpacity);
+        b.mesh.material.depthWrite = false;
       } else {
-        b.mesh.material.transparent = b.type === 'bridge';
         b.mesh.material.opacity = baseOpacity;
+        b.mesh.material.depthWrite = (baseOpacity === 1.0);
       }
     }
   });
@@ -2222,21 +2345,21 @@ function applyXrayOverride() {
   if (!xrayMode) return;
   activeBlocks.forEach(b => {
     if (b.mesh && b.mesh.visible) {
-      b.mesh.material.transparent = true;
       b.mesh.material.opacity = XRAY_OPACITY;
+      b.mesh.material.depthWrite = false;
     }
   });
   movingPlatformsList.forEach(mp => {
     if (mp.mesh && mp.mesh.visible) {
-      mp.mesh.material.transparent = true;
       mp.mesh.material.opacity = XRAY_OPACITY;
+      mp.mesh.material.depthWrite = false;
     }
   });
 }
 
 function toggleXray() {
   xrayMode = !xrayMode;
-  audio.playSwitch();
+  audio.playXrayToggle(xrayMode);
   updateEditorSlicing(); // applies the override, or restores normal opacity when off
   showMessage(xrayMode ? 'X-RAY VIEW ON' : 'X-RAY VIEW OFF', 1.2);
 }
@@ -2256,7 +2379,7 @@ function updatePauseOrbitCamera() {
 function togglePause() {
   if (isEditMode && !isPlaytesting) return; // pause only applies to play / playtest
   isPaused = !isPaused;
-  audio.playSwitch();
+  audio.playPauseToggle(isPaused);
   const ov = document.getElementById('pause-overlay');
   if (isPaused) {
     // Seed the orbit from the current camera so there's no jump on pause.
@@ -2633,7 +2756,7 @@ function editorSetStart(c) {
     playerCube.position.copy(getPlayerWorldPos(c.x, c.y, c.z, false));
     playerCube.quaternion.identity();
   }
-  audio.playRespawn();
+  audio.playPlace('start');
 }
 
 function handleEditorClick(e) {
@@ -2732,8 +2855,11 @@ function handleEditorClick(e) {
     }
     linkerSourceKey = null;
     if (linked) {
+      audio.playLinkSuccess();
       buildLevel3D(activeLevel);
       drawEditorWires();
+    } else {
+      audio.playLinkCancel();
     }
     return;
   }
@@ -2741,20 +2867,20 @@ function handleEditorClick(e) {
   // Placement tools — blocks go only onto the selected level (raise the height
   // ruler to build higher); drag-painting already snaps to that plane.
   if (BLOCK_TOOLS.includes(selectedTool)) {
-    if (hit.y === editY && editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playRoll();
+    if (hit.y === editY && editorPlaceBlock(hit.x, hit.y, hit.z, selectedTool)) audio.playPlace(selectedTool);
   } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
     const c = snapItemCell(hit);
-    if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
+    if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playPlace(selectedTool);
   } else if (selectedTool === 'enemy') {
     const c = snapItemCell(hit);
-    if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playRoll();
+    if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playPlace('enemy');
   } else if (selectedTool === 'start') {
     editorSetStart(snapItemCell(hit));
   } else if (selectedTool === 'exit') {
     const c = snapItemCell(hit);
     activeLevel.exit = { x: c.x, y: c.y, z: c.z };
     buildLevel3D(activeLevel);
-    audio.playComplete();
+    audio.playPlace('exit');
   }
   drawEditorWires();
 }
@@ -2780,13 +2906,13 @@ function handleEditorDragClick(e) {
     if (selectedTool === 'eraser') {
       if (editorEraseKey(key)) audio.playBreak();
     } else if (BLOCK_TOOLS.includes(selectedTool)) {
-      if (editorPlaceBlock(gx, gy, gz, selectedTool)) audio.playRoll();
+      if (editorPlaceBlock(gx, gy, gz, selectedTool)) audio.playPlace(selectedTool);
     } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
-      if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playCollect();
+      if (editorPlacePrism(c.x, c.y, c.z, selectedTool)) audio.playPlace(selectedTool);
     } else if (selectedTool === 'enemy') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
-      if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playRoll();
+      if (editorPlaceEnemy(c.x, c.y, c.z)) audio.playPlace('enemy');
     } else if (selectedTool === 'start') {
       const c = snapItemCell({ x: gx, y: gy, z: gz, hitKey: null });
       if (activeLevel.start.x !== c.x || activeLevel.start.y !== c.y || activeLevel.start.z !== c.z) {
@@ -2798,7 +2924,7 @@ function handleEditorDragClick(e) {
         activeLevel.exit = { x: c.x, y: c.y, z: c.z };
         buildLevel3D(activeLevel);
         drawEditorWires();
-        audio.playComplete();
+        audio.playPlace('exit');
       }
     }
   }
@@ -2835,6 +2961,7 @@ function enterPlaytestMode() {
   buildLevel3D(activeLevel);
   // Focus playing controls
   document.getElementById('btn-playtest-stop').addEventListener('click', exitPlaytestMode);
+  audio.playPlaytestEnter();
 }
 
 function exitPlaytestMode() {
@@ -2871,10 +2998,15 @@ function exitPlaytestMode() {
 
   buildLevel3D(activeLevel);
   drawEditorWires();
+  audio.playPlaytestExit();
 }
 
 function adjustEditHeight(val) {
+  const oldY = editY;
   editY = Math.max(rulerMinY, Math.min(rulerMaxY, editY + val));
+  if (editY !== oldY) {
+    audio.playHeightChange(val > 0);
+  }
   document.getElementById('height-display').textContent = editY;
   if (editorGridHelper) editorGridHelper.position.set(0.5, editY - 0.49, 0.5);
   if (editorGridPlane) editorGridPlane.position.set(0.5, editY - 0.49, 0.5);
@@ -2945,6 +3077,15 @@ window.addEventListener('keydown', (e) => {
   // While paused, swallow every other key so the frozen game can't be driven.
   if (isPaused) return;
 
+  // Place block in front of player at same level (E) or one level up (Q)
+  if (e.code === 'KeyE' || e.code === 'KeyQ') {
+    if (!isEditMode || isPlaytesting) {
+      e.preventDefault();
+      tryPlaceBlock(e.code === 'KeyQ');
+    }
+    return;
+  }
+
   if (isBalancing) {
     let rollBack = false;
     if (lastMoveDir.x === 1 && (e.code === 'ArrowLeft' || e.code === 'KeyA')) rollBack = true;
@@ -2986,7 +3127,11 @@ window.addEventListener('keydown', (e) => {
       return;
     }
     if (e.code === 'Escape') {
-      if (linkerSourceKey) { linkerSourceKey = null; showMessage('LINK CANCELLED', 1); }
+      if (linkerSourceKey) {
+        linkerSourceKey = null;
+        showMessage('LINK CANCELLED', 1);
+        audio.playLinkCancel();
+      }
       return;
     }
     // Camera pan (WASD/arrows) and rotate (Q/E) are applied continuously in the
@@ -3231,12 +3376,14 @@ window.addEventListener('wheel', (e) => {
    ═══════════════════════════════════════════════════════════ */
 document.getElementById('btn-play-load').addEventListener('click', () => {
   audio.init();
+  audio.playClick();
   updateLibraryList();
   document.getElementById('editor-library-panel').style.display = 'flex';
 });
 
 document.getElementById('btn-editor-toggle').addEventListener('click', () => {
   audio.init();
+  audio.playClick();
   if (isEditMode) exitEditMode(); else enterEditMode();
 });
 
@@ -3246,6 +3393,7 @@ function selectToolByName(name) {
   toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === name));
   selectedTool = name;
   linkerSourceKey = null;
+  audio.playToolSelect();
 }
 toolButtons.forEach((btn, i) => {
   if (i < 10) btn.title += ` [${(i + 1) % 10}]`;
@@ -3288,6 +3436,7 @@ document.getElementById('btn-demo-level').addEventListener('click', () => {
   genSelect.addEventListener('change', syncDiff);
   syncDiff();
   document.getElementById('btn-ai-run').addEventListener('click', () => {
+    audio.playClick();
     const map = { aigen: 'btn-ai-generate', aipro: 'btn-ai-architect', aipro2: 'btn-ai-architect2', aipro3: 'btn-ai-architect3' };
     const id = map[genSelect.value];
     if (id) document.getElementById(id).click();
@@ -3306,6 +3455,7 @@ document.getElementById('btn-ai-generate').addEventListener('click', () => {
     buildLevel3D(lvl);
     drawEditorWires();
     showMessage('AI LABYRINTH GENERATED');
+    audio.playAIGenerate();
   }
 });
 
@@ -3322,6 +3472,7 @@ document.getElementById('btn-ai-architect').addEventListener('click', () => {
     buildLevel3D(lvl);
     drawEditorWires();
     showMessage(`ARCHITECT LEVEL — DIFFICULTY ${difficulty}`);
+    audio.playAIGenerate();
   }
 });
 
@@ -3365,6 +3516,7 @@ document.getElementById('btn-ai-pro2-generate').addEventListener('click', () => 
   drawEditorWires();
   document.getElementById('ai-pro2-modal').style.display = 'none';
   showMessage(`AI PRO2 — ${lvl.name}`);
+  audio.playAIGenerate();
 });
 
 // AI Pro3 — criteria + per-criterion quantities, then generate.
@@ -3422,6 +3574,7 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
     parTightness: knob('parTightness'),
     branchLen:    knob('branchLen'),
     moverSpeed:   knob('moverSpeed'),
+    buildLimit:   cb('ai3-buildLimit') ? num('ai3-buildLimit-n') : 10,
   };
 
   pushUndoSnapshot();
@@ -3429,11 +3582,15 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
   activeLevel = lvl;
   document.getElementById('level-name-input').value = lvl.name;
   document.getElementById('world-select').value = lvl.world;
+  if (document.getElementById('level-build-limit-input')) {
+    document.getElementById('level-build-limit-input').value = lvl.buildBlocksLimit ?? 10;
+  }
   adjustEditHeight(-editY); // reset edit height to 0
   buildLevel3D(lvl);
   drawEditorWires();
   document.getElementById('ai-pro3-modal').style.display = 'none';
   showMessage(`AI PRO3 — ${lvl.name}`);
+  audio.playAIGenerate();
 });
 
 document.getElementById('btn-clear-grid').addEventListener('click', () => {
@@ -3445,14 +3602,19 @@ document.getElementById('btn-clear-grid').addEventListener('click', () => {
     lvlInsertDefaultBlocks(activeLevel);
     buildLevel3D(activeLevel);
     drawEditorWires();
+    audio.playClear();
   }
 });
 
 document.getElementById('btn-save-local').addEventListener('click', () => {
+  audio.playClick();
   const name = document.getElementById('level-name-input').value.trim();
   if (!name) return alert("Please specify level name.");
   activeLevel.name = name;
   activeLevel.world = parseInt(document.getElementById('world-select').value);
+  if (document.getElementById('level-build-limit-input')) {
+    activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
+  }
 
   let store = {};
   try { store = JSON.parse(localStorage.getItem('goose_levels') || '{}'); } catch(e){}
@@ -3462,23 +3624,30 @@ document.getElementById('btn-save-local').addEventListener('click', () => {
 });
 
 document.getElementById('btn-load-local').addEventListener('click', () => {
+  audio.playClick();
   updateLibraryList();
   document.getElementById('editor-library-panel').style.display = 'flex';
 });
 document.getElementById('btn-library-upload').addEventListener('click', () => {
+  audio.playClick();
   document.getElementById('import-file-input').click();
 });
 document.getElementById('btn-close-library').addEventListener('click', () => {
+  audio.playClick();
   document.getElementById('editor-library-panel').style.display = 'none';
 });
 
 // Export Level
 document.getElementById('btn-export-level').addEventListener('click', () => {
+  audio.playClick();
   // Persist the name/theme the user typed into the form so the exported JSON
   // (and the download filename) carry the current level name, not a stale one.
   const typedName = document.getElementById('level-name-input').value.trim();
   if (typedName) activeLevel.name = typedName;
   activeLevel.world = parseInt(document.getElementById('world-select').value, 10) || 0;
+  if (document.getElementById('level-build-limit-input')) {
+    activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
+  }
   const data = serializeLevel(activeLevel);
   document.getElementById('modal-title').textContent = 'EXPORT LEVEL';
   document.getElementById('modal-textarea').value = data;
@@ -3492,6 +3661,7 @@ document.getElementById('btn-export-level').addEventListener('click', () => {
 
 // Import Level
 document.getElementById('btn-import-level').addEventListener('click', () => {
+  audio.playClick();
   document.getElementById('modal-title').textContent = 'IMPORT LEVEL';
   document.getElementById('modal-textarea').value = '';
   document.getElementById('modal-textarea').readOnly = false;
@@ -3503,14 +3673,17 @@ document.getElementById('btn-import-level').addEventListener('click', () => {
 });
 
 document.getElementById('btn-modal-close').addEventListener('click', () => {
+  audio.playClick();
   document.getElementById('export-import-modal').style.display = 'none';
 });
 document.getElementById('btn-modal-copy').addEventListener('click', () => {
+  audio.playClick();
   const area = document.getElementById('modal-textarea');
   area.select(); document.execCommand('copy');
   showMessage('Copied to clipboard');
 });
 document.getElementById('btn-modal-download').addEventListener('click', () => {
+  audio.playClick();
   const data = document.getElementById('modal-textarea').value;
   const blob = new Blob([data], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -3524,6 +3697,7 @@ document.getElementById('btn-modal-download').addEventListener('click', () => {
   showMessage('File downloaded');
 });
 document.getElementById('btn-modal-upload').addEventListener('click', () => {
+  audio.playClick();
   document.getElementById('import-file-input').click();
 });
 document.getElementById('import-file-input').addEventListener('change', (e) => {
@@ -3665,13 +3839,20 @@ function startEnemyRoll(enemy, dx, dz) {
   enemy.grid.x = toGX;
   enemy.grid.y = ny;
   enemy.grid.z = toGZ;
+
+  audio.playEnemyRoll();
 }
 
 function loseLife() {
   if (playerInvincible) return;
   playerLives--;
   const isGameOver = playerLives <= 0;
-  if (isGameOver) playerLives = MAX_LIVES;
+  if (isGameOver) {
+    playerLives = MAX_LIVES;
+    audio.playGameOver();
+  } else {
+    audio.playDamage();
+  }
   updateLivesUI();
   respawnPlayer(); // resets level + shows LEVEL RESTART
   // Override message and set invincibility AFTER respawn
@@ -3690,6 +3871,120 @@ function updateLivesUI() {
   el.innerHTML = html;
 }
 
+let transparencyUpdateTimer = 0;
+
+function updateDynamicTransparency() {
+  if (isEditMode && !isPlaytesting) {
+    // Reset all opacities in editor mode
+    activeBlocks.forEach(block => {
+      if (block.mesh) {
+        const defaultOpacity = block.type === 'bridge' ? (block.active === false ? 0.18 : 0.4) : 1.0;
+        const targetOpacity = xrayMode ? XRAY_OPACITY : defaultOpacity;
+        block.mesh.material.opacity = targetOpacity;
+        block.mesh.material.depthWrite = !xrayMode && (defaultOpacity === 1.0);
+      }
+    });
+    return;
+  }
+
+  const targets = [];
+  
+  // 1. Focus targets that we want to keep visible
+  if (playerCube) {
+    targets.push(playerCube.position.clone().add(new THREE.Vector3(0, 0.5, 0)));
+  }
+  if (exitRing) {
+    targets.push(new THREE.Vector3(exitPos.x, exitPos.y + 0.5, exitPos.z));
+  }
+  activePrisms.forEach(prism => {
+    targets.push(new THREE.Vector3(prism.x, prism.y + 0.5, prism.z));
+  });
+  
+  activeBlocks.forEach(block => {
+    if (block.type === 'switch' || block.type === 'pressureplate') {
+      targets.push(new THREE.Vector3(block.x, block.y + 0.5, block.z));
+    } else {
+      const keyAbove = `${block.x},${block.y + 1},${block.z}`;
+      if (!activeBlocks.has(keyAbove)) {
+        targets.push(new THREE.Vector3(block.x, block.y + 0.5, block.z));
+      }
+    }
+  });
+
+  // 2. Gather candidate meshes that can obstruct view
+  const candidateMeshes = [];
+  const meshToBlockMap = new Map();
+  activeBlocks.forEach(block => {
+    if (block.mesh) {
+      candidateMeshes.push(block.mesh);
+      meshToBlockMap.set(block.mesh.id, block);
+    }
+  });
+
+  const obstructingBlocks = new Set();
+  const raycaster = new THREE.Raycaster();
+  const camPos = camera.position;
+
+  targets.forEach(targetPos => {
+    const dir = targetPos.clone().sub(camPos);
+    const dist = dir.length();
+    if (dist < 0.1) return;
+    
+    dir.normalize();
+    raycaster.set(camPos, dir);
+    raycaster.far = dist - 0.05; // Stop before target to avoid self-intersection
+    
+    const intersects = raycaster.intersectObjects(candidateMeshes, true);
+    intersects.forEach(hit => {
+      let obj = hit.object;
+      while (obj && !meshToBlockMap.has(obj.id)) {
+        obj = obj.parent;
+      }
+      if (obj) {
+        const block = meshToBlockMap.get(obj.id);
+        if (block) {
+          obstructingBlocks.add(block);
+        }
+      }
+    });
+  });
+
+  // 3. Apply opacity
+  activeBlocks.forEach(block => {
+    if (block.mesh) {
+      const isObstructing = obstructingBlocks.has(block);
+      const baseOpacity = block.type === 'bridge' ? (block.active === false ? 0.18 : 0.4) : 1.0;
+      
+      if (isObstructing) {
+        block.mesh.material.opacity = Math.min(baseOpacity, 0.2);
+        block.mesh.material.depthWrite = false;
+        
+        block.mesh.traverse(child => {
+          if (child !== block.mesh && child.material) {
+            if (child.userData.originalOpacity === undefined) {
+              child.userData.originalOpacity = child.material.opacity !== undefined ? child.material.opacity : 1.0;
+            }
+            child.material.opacity = Math.min(child.userData.originalOpacity, 0.2);
+            child.material.depthWrite = false;
+          }
+        });
+      } else {
+        const targetOpacity = xrayMode ? XRAY_OPACITY : baseOpacity;
+        block.mesh.material.opacity = targetOpacity;
+        block.mesh.material.depthWrite = !xrayMode && (baseOpacity === 1.0);
+        
+        block.mesh.traverse(child => {
+          if (child !== block.mesh && child.material) {
+            const orig = child.userData.originalOpacity !== undefined ? child.userData.originalOpacity : 1.0;
+            child.material.opacity = xrayMode ? Math.min(orig, XRAY_OPACITY) : orig;
+            child.material.depthWrite = !xrayMode && (orig === 1.0);
+          }
+        });
+      }
+    }
+  });
+}
+
 /* ═══════════════════════════════════════════════════════════
    ANIMATION & RENDER LOOP
    ═══════════════════════════════════════════════════════════ */
@@ -3700,6 +3995,12 @@ function animate(timestamp) {
   const now = timestamp/1000;
   const dt = Math.min(clock.getDelta(), 0.1);
 
+  // Dynamic transparency update (throttled for high performance)
+  transparencyUpdateTimer++;
+  if (transparencyUpdateTimer % 6 === 0) {
+    updateDynamicTransparency();
+  }
+
   // Spatial starfield: a star dome around the camera, only while playing (not in
   // the editor). Recentre on the camera so it never clips, and drift it slowly
   // so orbiting the level sweeps the stars across the view for depth.
@@ -3708,12 +4009,20 @@ function animate(timestamp) {
     starfield.visible = playing;
     if (playing) {
       starfield.position.copy(camera.position);
-      starfield.rotation.y += dt * 0.010;
-      starfield.rotation.x += dt * 0.004;
-      // Mystic zoom: slow breathing scale so the dome drifts in and out.
-      const pulse = 1 + Math.sin(now * 0.18) * 0.14;
-      starfield.scale.setScalar(pulse);
-      starUniforms.uTime.value = now; // drive per-star twinkle
+      if (isLevelComplete && completeAnimStartTime > 0) {
+        const elapsed = now - completeAnimStartTime;
+        starfield.rotation.y += dt * 0.45;
+        starfield.rotation.x += dt * 0.15;
+        const blast = 1 + Math.pow(elapsed * 12.0, 2.2);
+        starfield.scale.setScalar(blast);
+        starUniforms.uTime.value = now * 10.0;
+      } else {
+        starfield.rotation.y += dt * 0.010;
+        starfield.rotation.x += dt * 0.004;
+        const pulse = 1 + Math.sin(now * 0.18) * 0.14;
+        starfield.scale.setScalar(pulse);
+        starUniforms.uTime.value = now;
+      }
     }
   }
 
@@ -3908,8 +4217,8 @@ function animate(timestamp) {
 
     // ─── ENEMIES ─────────────────────────────────────────────
     for (const en of enemies) {
-      // Rainbow color cycle
-      en.hue = (en.hue + dt * 0.55) % 1.0;
+      // Rainbow color cycle (enhanced 3X)
+      en.hue = (en.hue + dt * 1.65) % 1.0;
       en.cube.material.color.setHSL(en.hue, 1.0, 0.52);
       en.cube.material.emissive.setHSL(en.hue, 1.0, 0.38);
 
@@ -4025,7 +4334,13 @@ function animate(timestamp) {
     const prog = p.userData.age / p.userData.life;
     p.position.addScaledVector(p.userData.vel, dt);
     p.userData.vel.y -= 4 * dt; // gravity
-    p.material.opacity = 1 - prog; p.scale.setScalar(1 - prog*0.7);
+    p.material.opacity = 1 - prog;
+    p.scale.setScalar(1 - prog*0.7);
+    if (p.userData.spin) {
+      p.rotation.x += p.userData.spin.x * dt;
+      p.rotation.y += p.userData.spin.y * dt;
+      p.rotation.z += p.userData.spin.z * dt;
+    }
   }
 
   // Update trails
@@ -4105,25 +4420,83 @@ const HELP_ELEMENTS = [
   document.getElementById('help-hint')?.addEventListener('click', () => setHelpOpen(true));
   overlay?.addEventListener('click', (e) => { if (e.target === overlay) setHelpOpen(false); });
 
-  // Title card: show for ~2 seconds, then fade out.
+  // Title card: show for ~1 second, then fade out.
   const title = document.getElementById('title-splash');
   if (title) {
-    setTimeout(() => title.classList.add('hide'), 2000);
-    setTimeout(() => { title.style.display = 'none'; }, 2700);
+    setTimeout(() => title.classList.add('hide'), 1000);
+    setTimeout(() => { title.style.display = 'none'; }, 1700);
   }
 
   // Briefly fade the credits splash in, then out.
   const splash = document.getElementById('intro-splash');
   if (splash) {
     requestAnimationFrame(() => splash.classList.add('show'));
-    setTimeout(() => splash.classList.remove('show'), 5200);
-    setTimeout(() => { splash.style.display = 'none'; }, 6100);
+    setTimeout(() => splash.classList.remove('show'), 1000);
+    setTimeout(() => { splash.style.display = 'none'; }, 1900);
   }
 })();
 
 function setHelpOpen(open) {
   isHelpOpen = open;
   document.getElementById('help-overlay')?.classList.toggle('open', open);
+}
+
+// Global click feedback sound for all UI buttons
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button') || e.target.closest('select')) {
+    if (!e.target.closest('#music-ui')) {
+      audio.playClick();
+    }
+  }
+});
+
+function updateBuildUI() {
+  const el = document.getElementById('build-counter');
+  if (!el) return;
+  const limit = activeLevel.buildBlocksLimit ?? 10;
+  const remaining = Math.max(0, limit - placedBlocksCount);
+  el.textContent = `${remaining} block${remaining !== 1 ? 's' : ''}`;
+  el.style.color = remaining === 0 ? '#ff3355' : '#aaa';
+}
+
+function tryPlaceBlock(stepUp) {
+  if (isRolling || isFalling || isTeleporting || isLevelComplete) return;
+
+  const limit = activeLevel.buildBlocksLimit ?? 10;
+  if (placedBlocksCount >= limit) {
+    audio.playLinkCancel();
+    showMessage('BLOCK LIMIT REACHED!', 1.2);
+    return;
+  }
+
+  const dx = lastMoveDir.x !== 0 || lastMoveDir.z !== 0 ? lastMoveDir.x : 0;
+  const dz = lastMoveDir.x !== 0 || lastMoveDir.z !== 0 ? lastMoveDir.z : -1;
+
+  const targetX = playerGridPos.x + dx;
+  const targetY = playerGridPos.y + (stepUp ? 1 : 0);
+  const targetZ = playerGridPos.z + dz;
+
+  const key = `${targetX},${targetY},${targetZ}`;
+
+  if (activeBlocks.has(key)) {
+    audio.playLinkCancel();
+    showMessage('BLOCKED!', 1.0);
+    return;
+  }
+
+  const block = { x: targetX, y: targetY, z: targetZ, type: 'normal', properties: {}, active: true, broken: false };
+  activeBlocks.set(key, block);
+  createBlockMesh(block, key);
+
+  spawnEntranceParticles(targetX, targetY, targetZ);
+
+  placedBlocksCount++;
+  updateBuildUI();
+
+  audio.playSwitch();
+
+  const remaining = limit - placedBlocksCount;
+  showMessage(`BLOCK PLACED! (${remaining} LEFT)`, 1.0);
 }
 
 // START — fetch the level manifest, load level 1, then begin the render loop.

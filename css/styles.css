@@ -114,6 +114,11 @@
     box-shadow: 0 0 15px rgba(0, 204, 255, 0.4);
   }
 
+  #hud-bottom-left {
+    position: fixed; left: 16px; bottom: 64px; z-index: 230;
+    display: flex; gap: 8px; pointer-events: auto;
+  }
+
   /* ═══════════════════════════════════════════════════════════
      EDITOR UI CSS (GLASSMORPHISM PANELS)
      ═══════════════════════════════════════════════════════════ */

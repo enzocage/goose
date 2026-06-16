@@ -125,18 +125,5 @@
     toggle.classList.toggle('active', open);
   });
 
-  // Auto-start on the FIRST game interaction (key press or pointer down that
-  // is not on the music UI itself). Runs inside the gesture so autoplay works.
-  function maybeAutostart(e) {
-    if (autostarted) return;
-    if (e.type === 'pointerdown' && e.target.closest && e.target.closest('#music-ui')) return;
-    autostarted = true;
-    window.removeEventListener('keydown', maybeAutostart, true);
-    window.removeEventListener('pointerdown', maybeAutostart, true);
-    loadTrack(0);
-  }
-  window.addEventListener('keydown', maybeAutostart, true);
-  window.addEventListener('pointerdown', maybeAutostart, true);
-
   renderList();
 })();
