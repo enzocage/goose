@@ -5,7 +5,7 @@
   }
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
-    background: var(--bg); overflow: hidden;
+    background: var(--bg); overflow: hidden; color: var(--text);
     font-family: 'Segoe UI', system-ui, sans-serif;
     user-select: none; -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
@@ -156,11 +156,20 @@
     font-size: 16px; line-height: 20px; height: 20px;
   }
   #editor-top-bar {
-    position: fixed; top: 20px; left: 20px; right: 20px; height: 60px;
+    position: fixed; top: 20px; left: 20px; right: 20px; min-height: 60px;
     background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px;
     z-index: 100; display: flex; align-items: center; justify-content: space-between;
-    padding: 0 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    flex-wrap: wrap; gap: 10px; padding: 10px 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+  }
+  #editor-top-bar > div, #editor-top-bar > .editor-actions { min-width: 0; }
+  .editor-actions {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+  }
+  .editor-ai-group {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(0, 255, 136, 0.06); border: 1px solid rgba(0, 255, 136, 0.25);
+    border-radius: 8px; padding: 4px 6px;
   }
   .editor-title {
     font-size: 14px; letter-spacing: 0.25em; font-weight: 200; color: var(--text);
@@ -202,11 +211,11 @@
     background: var(--danger); color: #fff; box-shadow: 0 0 15px rgba(255,51,85,0.4);
   }
   #editor-bottom-bar {
-    position: fixed; bottom: 20px; left: 20px; right: 20px; height: 60px;
+    position: fixed; bottom: 20px; left: 20px; right: 20px; min-height: 60px;
     background: rgba(15, 15, 25, 0.75); backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px;
     z-index: 100; display: flex; align-items: center; justify-content: space-between;
-    padding: 0 20px; box-shadow: 0 -10px 25px rgba(0,0,0,0.4);
+    flex-wrap: wrap; gap: 10px; padding: 10px 20px; box-shadow: 0 -10px 25px rgba(0,0,0,0.4);
   }
   .height-btn {
     background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
@@ -225,8 +234,12 @@
     box-shadow: -10px 15px 30px rgba(0,0,0,0.5);
   }
   .levels-list {
-    flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    flex-grow: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    padding-right: 6px; margin-right: -6px;
   }
+  .levels-list::-webkit-scrollbar { width: 8px; }
+  .levels-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+  .levels-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
   .library-item {
     background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
     border-radius: 6px; color: var(--text); padding: 8px 10px; font-size: 11px;
@@ -275,7 +288,7 @@
   .ai2-option input { margin-top: 2px; accent-color: var(--green); cursor: pointer; flex-shrink: 0; }
   .ai2-option span { display: flex; flex-direction: column; }
   .ai2-option b { font-size: 11px; color: var(--text); }
-  .ai2-option small { font-size: 9px; opacity: 0.55; }
+  .ai2-option small { font-size: 9px; color: var(--text); opacity: 0.72; }
   .ai2-size-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; font-size: 11px; }
   .ai2-size-row input[type=range] { flex-grow: 1; accent-color: var(--green); cursor: pointer; }
   #ai2-size-val, #ai3-size-val { width: 18px; text-align: center; color: var(--accent2); font-weight: bold; }
@@ -301,7 +314,7 @@
   .ai3-option > input[type=checkbox] { accent-color: var(--green); cursor: pointer; flex-shrink: 0; }
   .ai3-text { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; }
   .ai3-text b { font-size: 11px; color: var(--text); }
-  .ai3-text small { font-size: 9px; opacity: 0.55; }
+  .ai3-text small { font-size: 9px; color: var(--text); opacity: 0.72; }
   .ai3-qty {
     width: 50px; flex-shrink: 0; text-align: center;
     background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
@@ -386,6 +399,71 @@
   .tooltip-stacking {
     color: var(--accent); font-weight: bold; font-size: 9px;
     margin-left: 5px; text-transform: uppercase;
+  }
+
+  /* Compound-object grouping indicator (active while O is held) */
+  #grouping-indicator {
+    position: fixed; top: 92px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    z-index: 1001; display: none; align-items: center; gap: 10px;
+    background: rgba(40, 26, 0, 0.92); border: 2px solid #ffaa00; border-radius: 30px;
+    padding: 8px 18px; color: #ffd699; font-size: 12px; letter-spacing: 0.06em;
+    box-shadow: 0 0 24px rgba(255, 170, 0, 0.55), inset 0 0 12px rgba(255, 170, 0, 0.2);
+    pointer-events: none; opacity: 0; transition: opacity 0.15s, transform 0.15s;
+  }
+  #grouping-indicator.active {
+    display: flex; opacity: 1; transform: translateX(-50%) translateY(0);
+    animation: groupingPulse 1s ease-in-out infinite;
+  }
+  #grouping-indicator .group-dot {
+    width: 11px; height: 11px; border-radius: 50%; background: #ffaa00; flex-shrink: 0;
+    box-shadow: 0 0 10px #ffaa00;
+  }
+  #grouping-indicator.active .group-dot { animation: groupingDot 1s ease-in-out infinite; }
+  #grouping-indicator .group-label { font-weight: bold; color: #ffcc44; text-transform: uppercase; }
+  #grouping-indicator .group-count {
+    font-weight: bold; color: #fff; background: rgba(255, 170, 0, 0.25);
+    border-radius: 12px; padding: 2px 10px;
+  }
+  #grouping-indicator .group-hint { opacity: 0.7; font-size: 11px; }
+  #grouping-indicator .group-hint b { color: #ffcc44; }
+  @keyframes groupingPulse {
+    0%, 100% { box-shadow: 0 0 18px rgba(255,170,0,0.40), inset 0 0 12px rgba(255,170,0,0.15); }
+    50%      { box-shadow: 0 0 34px rgba(255,170,0,0.75), inset 0 0 16px rgba(255,170,0,0.30); }
+  }
+  @keyframes groupingDot { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  /* Subtle screen-edge glow while grouping, to reinforce the special mode. */
+  #grouping-vignette {
+    position: fixed; inset: 0; z-index: 98; pointer-events: none; display: none;
+    box-shadow: inset 0 0 120px rgba(255, 170, 0, 0.18);
+  }
+  #grouping-vignette.active { display: block; animation: groupingPulse 1s ease-in-out infinite; }
+
+  /* ═══ RESPONSIVE EDITOR ═══ */
+  /* The top/bottom bars wrap on their own (flex-wrap); these queries shrink the
+     side panels and controls so the editor stays usable on smaller screens. */
+  @media (max-width: 1100px) {
+    #editor-instructions { display: none; }          /* free space: drop the controls guide */
+    #editor-height-ruler { right: 20px; }
+  }
+  @media (max-width: 820px) {
+    #editor-top-bar { top: 8px; left: 8px; right: 8px; padding: 8px 12px; gap: 8px; }
+    #editor-bottom-bar { bottom: 8px; left: 8px; right: 8px; padding: 8px 12px; }
+    .editor-title { display: none; }                 /* label is decorative — hide it first */
+    .editor-btn { padding: 7px 10px; font-size: 10px; letter-spacing: 0.04em; }
+    .editor-select, .editor-input { padding: 6px 8px; font-size: 11px; }
+    .editor-input { width: 120px; }
+    #editor-toolbox { top: 150px; width: 150px; padding: 12px; }
+    #editor-height-ruler { top: 150px; width: 38px; }
+  }
+  @media (max-width: 560px) {
+    /* Dock the toolbox along the bottom as a compact 4-column grid. */
+    #editor-toolbox {
+      left: 8px; right: 8px; width: auto; top: auto; bottom: 80px; max-height: 42vh;
+    }
+    .tool-grid { grid-template-columns: repeat(4, 1fr); }
+    #editor-height-ruler { display: none; }
+    .editor-actions { justify-content: center; }
+    .editor-input { width: 100px; }
   }
 
   /* ═══ SUBTLE BACKGROUND MUSIC PLAYER ═══ */
@@ -484,7 +562,7 @@
   .intro-hint { margin-top: 22px; font-size: 13px; letter-spacing: 0.18em; color: rgba(224,224,224,0.55); text-transform: uppercase; }
 
   #help-hint {
-    position: fixed; right: 16px; bottom: 16px; z-index: 230;
+    position: fixed; left: 64px; bottom: 16px; z-index: 230;
     background: rgba(15,15,25,0.55); backdrop-filter: blur(10px);
     border: 1px solid rgba(255,255,255,0.12); border-radius: 18px;
     color: rgba(224,224,224,0.6); padding: 7px 14px; font-size: 11px; letter-spacing: 0.12em;

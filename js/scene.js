@@ -75,8 +75,91 @@ worldGroup.add(tilesGroup); worldGroup.add(prismsGroup);
 worldGroup.add(effectsGroup); worldGroup.add(bridgeGroup);
 scene.add(worldGroup);
 
+/* ═══ SPATIAL 3D STARFIELD ═══
+   A dense dome of solid round stars surrounding the camera for background depth
+   while playing. A custom shader draws perfectly circular, full-bodied discs
+   with a bright sparkle core and per-star twinkle (driven by uTime). Recentred
+   on the camera each frame and given a slow rotation + breathing "zoom" pulse
+   (see main.js) for a mystical drifting-through-space feel. Stars ignore scene
+   fog and sit inside the camera far plane, so they never clip or fade out. */
+const STAR_COLORS = [
+  '#ffffff', '#ffffff', '#cfe6ff', '#9fd0ff', '#ffe9c9',
+  '#ffd36e', '#ff7ad9', '#7afcff', '#9b8bff', '#7dff9e', '#ff6f91',
+];
+const starUniforms = {
+  uTime: { value: 0 },
+  uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+};
+const STAR_VERT = `
+  attribute vec3 aColor;
+  attribute float aSize;
+  attribute float aPhase;
+  uniform float uTime;
+  uniform float uPixelRatio;
+  varying vec3 vColor;
+  varying float vTw;
+  void main() {
+    float tw = 0.45 + 0.55 * sin(uTime * 2.0 + aPhase); // per-star twinkle
+    vTw = tw;
+    vColor = aColor;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    float size = aSize * uPixelRatio * (220.0 / -mv.z) * (0.7 + 0.6 * tw);
+    gl_PointSize = clamp(size, 1.0, 56.0);
+    gl_Position = projectionMatrix * mv;
+  }`;
+const STAR_FRAG = `
+  varying vec3 vColor;
+  varying float vTw;
+  void main() {
+    vec2 uv = gl_PointCoord - 0.5;
+    float d = length(uv);
+    if (d > 0.5) discard;                  // perfectly round
+    float disc = smoothstep(0.5, 0.44, d); // solid, full-bodied fill (thin AA edge)
+    float core = smoothstep(0.34, 0.0, d); // bright sparkle centre
+    vec3 col = vColor * (0.8 + 1.1 * core);
+    gl_FragColor = vec4(col * (0.45 + 0.75 * vTw), disc);
+  }`;
+function buildStarfield(count, rMin, rMax) {
+  const palette = STAR_COLORS.map(c => new THREE.Color(c));
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  const phases = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = rMin + Math.random() * (rMax - rMin);
+    positions[i*3]   = r * Math.sin(phi) * Math.cos(theta);
+    positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i*3+2] = r * Math.cos(phi);
+    const col = palette[(Math.random() * palette.length) | 0];
+    const b = 0.75 + Math.random() * 0.35;
+    colors[i*3] = col.r * b; colors[i*3+1] = col.g * b; colors[i*3+2] = col.b * b;
+    // Mostly fine dust, some mid stars, a few big bright sparkles.
+    const t = Math.random();
+    sizes[i] = t > 0.97 ? 3.2 + Math.random() * 1.8
+             : t > 0.82 ? 1.6 + Math.random() * 1.2
+             : 0.7 + Math.random() * 0.9;
+    phases[i] = Math.random() * Math.PI * 2;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: starUniforms, vertexShader: STAR_VERT, fragmentShader: STAR_FRAG,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  return new THREE.Points(geo, mat);
+}
+const starfield = new THREE.Group();
+starfield.add(buildStarfield(3600, 24, 62)); // dense, colourful, sparkly dome
+starfield.renderOrder = -1;
+scene.add(starfield);
+
 export {
-  renderer, scene, camera, underGlow,
+  renderer, scene, camera, underGlow, starfield, starUniforms,
   matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
   matCube, matPrism, matMiniPrism, matPrismGlow, matBridge, matSwitchPillar,
   matCrate, matPressurePlate, matDanger, matShaker, matBooster,

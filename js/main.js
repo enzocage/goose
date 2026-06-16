@@ -1,21 +1,22 @@
 import * as THREE from 'three';
 import { TILE_SIZE, CUBE_S, ROLL_DUR_NORMAL, ROLL_DUR_MINI, CAM_LERP, BALANCE_WINDOW, COMBO_TIMEOUT } from './constants.js';
-import { WORLDS, LEVELS, DEMO_LEVEL } from './levels-data.js';
+import { WORLDS, DEMO_LEVEL } from './levels-data.js';
 import { AudioEngine } from './audio.js';
 import {
-  renderer, scene, camera, underGlow,
+  renderer, scene, camera, underGlow, starfield, starUniforms,
   matTileBase, matTileFragile, matTileIce, matTileSwitch, matTileTp, matTileExit,
   matCube, matPrism, matMiniPrism, matPrismGlow, matBridge, matSwitchPillar,
   matCrate, matPressurePlate, matDanger, matShaker, matBooster,
   geoTile, geoThinTile, geoCube, geoPrism, geoRing, geoPillar, geoTrail,
   worldGroup, tilesGroup, prismsGroup, effectsGroup, bridgeGroup
 } from './scene.js';
-import { Level3D, MovingPlatform, convertTo3D, serializeLevel, deserializeLevel } from './level.js';
+import { Level3D, MovingPlatform, serializeLevel, deserializeLevel } from './level.js';
 
 const audio = new AudioEngine();
 
 /* ═══ GAME & EDITOR STATE ═══ */
 let currentLevelIdx = 0;
+let premadeLevels = []; // raw JSON strings fetched from /level (1.json, 2.json, …)
 let customLevels = []; // Array of Level3D loaded from LocalStorage
 let activeLevel = null; // Current playing Level3D
 let levelSnapshot = null; // Serialized pristine state, used for full reset on death/restart
@@ -121,7 +122,7 @@ let editorGridHelper = null;
 let editorGridPlane = null;
 let editorGhostBlock = null;
 let editorWiresGroup = null;
-let sliceModeActive = true;
+let sliceModeActive = false; // layer slicing off by default in the editor
 const rulerMinY = -3, rulerMaxY = 10;
 
 let editorCameraTarget = new THREE.Vector3(0, 0, 0);
@@ -574,6 +575,24 @@ function showMessage(text, dur=2) {
   const el = document.getElementById('message');
   el.textContent = text; el.classList.add('visible');
   clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('visible'), dur*1000);
+}
+
+// ── Compound-object grouping indicator (active while O is held) ──
+function groupMemberCount(gid) {
+  if (gid === null || gid === undefined || !activeLevel) return 0;
+  let n = 0;
+  activeLevel.blocks.forEach(b => { if (b.properties && b.properties.group === gid) n++; });
+  return n;
+}
+function refreshGroupingIndicator() {
+  const el = document.getElementById('group-count');
+  if (!el) return;
+  const n = groupMemberCount(currentGroupId);
+  el.textContent = `${n} block${n === 1 ? '' : 's'}`;
+}
+function setGroupingUI(active) {
+  document.getElementById('grouping-indicator').classList.toggle('active', active);
+  document.getElementById('grouping-vignette').classList.toggle('active', active);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1290,7 +1309,7 @@ function completeLevel() {
     if (isEditMode) {
       exitPlaytestMode();
     } else {
-      currentLevelIdx = (currentLevelIdx + 1) % LEVELS.length;
+      currentLevelIdx = (currentLevelIdx + 1) % premadeLevels.length;
       loadPreMadeLevel(currentLevelIdx);
     }
   }, 2500);
@@ -2071,6 +2090,8 @@ function exitEditMode() {
   if (!isEditMode) return;
   isEditMode = false;
   isPainting = false;
+  currentGroupId = null;
+  setGroupingUI(false);
   document.getElementById('editor-ui').style.display = 'none';
   document.getElementById('hud').style.display = 'flex';
   document.getElementById('editor-tooltip').style.display = 'none';
@@ -2415,6 +2436,19 @@ function drawEditorWires() {
     });
   });
 
+  // While grouping (O held), wrap every member of the active group in a bright
+  // orange wireframe box so it's obvious which blocks are being combined.
+  if (currentGroupId !== null) {
+    const boxGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.12, 1.12, 1.12));
+    activeLevel.blocks.forEach(b => {
+      if (!b.properties || b.properties.group !== currentGroupId) return;
+      const yOff = (b.type === 'bridge') ? 0.4 : 0;
+      const box = new THREE.LineSegments(boxGeo, new THREE.LineBasicMaterial({ color: 0xffbb33 }));
+      box.position.set(b.x, b.y + yOff, b.z);
+      editorWiresGroup.add(box);
+    });
+  }
+
   // Draw paths for moving platforms
   activeLevel.blocks.forEach((b, k) => {
     if (b.type === 'moving' && b.properties.targetX !== undefined) {
@@ -2561,6 +2595,12 @@ function editorPlaceBlock(x, y, z, type) {
     createBlockMesh(rb, key);
   }
   updateEditorSlicing();
+  // While grouping (O held), give live audio + visual feedback per added block.
+  if (currentGroupId !== null) {
+    audio.playGroupAdd(groupMemberCount(currentGroupId));
+    refreshGroupingIndicator();
+    drawEditorWires();
+  }
   return true;
 }
 
@@ -2773,6 +2813,8 @@ let savedEditorLevel = null;
 function enterPlaytestMode() {
   isPlaytesting = true;
   isPainting = false;
+  currentGroupId = null;
+  setGroupingUI(false);
   playerLives = MAX_LIVES;
   savedEditorLevel = serializeLevel(activeLevel); // Save design snapshot
 
@@ -2843,11 +2885,34 @@ function adjustEditHeight(val) {
 /* ═══════════════════════════════════════════════════════════
    PRE-MADE LEVEL LOADER
    ═══════════════════════════════════════════════════════════ */
+// Probe /level for sequential files (1.json, 2.json, …) and keep their raw JSON.
+// Stops at the first gap, so dropping in N.json files extends the campaign with
+// no code change. Guards against SPA fallbacks (a 200 that isn't valid level
+// JSON) and caps the probe so a misconfigured server can't loop forever.
+async function loadLevelManifest() {
+  const levels = [];
+  for (let i = 1; i <= 200; i++) {
+    let res;
+    try { res = await fetch(`level/${i}.json`, { cache: 'no-cache' }); }
+    catch (e) { break; }
+    if (!res.ok) break;
+    let text;
+    try { text = await res.text(); } catch (e) { break; }
+    let data;
+    try { data = JSON.parse(text); } catch (e) { break; } // not real level JSON → stop
+    if (!data || !Array.isArray(data.blocks) || !data.start || !data.exit) break;
+    levels.push(text);
+  }
+  return levels;
+}
+
 function loadPreMadeLevel(idx) {
   isCustomLevel = false;
   playerLives = MAX_LIVES;
-  const flatLvl = LEVELS[idx];
-  const lvl3D = convertTo3D(flatLvl);
+  if (!premadeLevels.length) return; // manifest not ready (or no level files)
+  const n = premadeLevels.length;
+  const i = ((idx % n) + n) % n;
+  const lvl3D = deserializeLevel(premadeLevels[i]);
   buildLevel3D(lvl3D);
 }
 
@@ -2894,6 +2959,7 @@ window.addEventListener('keydown', (e) => {
 
   if (isEditMode && !isPlaytesting) {
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') { e.preventDefault(); editorUndo(); return; }
+    if (e.code === 'KeyU') { e.preventDefault(); editorUndo(); return; }
     // Tool hotkeys: 1-9 and 0 pick the first ten tools, X = eraser, L = linker
     const digit = e.code.match(/^Digit(\d)$/);
     if (digit) {
@@ -2904,6 +2970,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyX') { selectToolByName('eraser'); return; }
     if (e.code === 'KeyL') { selectToolByName('linker'); return; }
     if (e.code === 'KeyO') {
+      if (e.repeat) return; // ignore key-repeat while O is held down
       // Start a new compound object: every block placed while O is held shares
       // this id. Pick max existing group + 1 so it stays unique after load.
       let maxG = 0;
@@ -2911,7 +2978,11 @@ window.addEventListener('keydown', (e) => {
         if (b.properties && typeof b.properties.group === 'number' && b.properties.group > maxG) maxG = b.properties.group;
       });
       currentGroupId = maxG + 1;
-      showMessage('GROUPING — PLACE BLOCKS, RELEASE O TO FINISH');
+      audio.init();
+      audio.playGroupStart();
+      setGroupingUI(true);
+      refreshGroupingIndicator();
+      drawEditorWires(); // highlight current-group members (orange boxes)
       return;
     }
     if (e.code === 'Escape') {
@@ -2938,7 +3009,7 @@ window.addEventListener('keydown', (e) => {
     case 'Space': e.preventDefault();
       if (isLevelComplete) {
         if (!isEditMode) {
-          currentLevelIdx = (currentLevelIdx+1)%LEVELS.length; loadPreMadeLevel(currentLevelIdx);
+          currentLevelIdx = (currentLevelIdx+1)%premadeLevels.length; loadPreMadeLevel(currentLevelIdx);
         }
       }
       break;
@@ -2948,7 +3019,11 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   keysPressed[e.code] = false;
   if (e.code === 'KeyO' && currentGroupId !== null) {
+    const n = groupMemberCount(currentGroupId);
     currentGroupId = null;
+    setGroupingUI(false);
+    audio.playGroupEnd();
+    if (n > 0) showMessage(`OBJECT GROUPED — ${n} BLOCK${n === 1 ? '' : 'S'}`, 1.5);
     drawEditorWires();
   }
 });
@@ -3039,6 +3114,9 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         else if (selectedTool === 'start') ghostColor = 0xff6600;
         else if (selectedTool === 'exit') ghostColor = 0x00ffaa;
         else if (selectedTool === 'enemy') ghostColor = 0xff0066;
+        // While grouping (O held), tint the placement preview orange to signal
+        // that the next block will join the current compound object.
+        if (currentGroupId !== null && BLOCK_TOOLS.includes(selectedTool)) ghostColor = 0xffbb33;
 
         editorGhostBlock.material.color.setHex(ghostColor);
         let targetY = hit.y;
@@ -3154,7 +3232,7 @@ window.addEventListener('wheel', (e) => {
 document.getElementById('btn-play-load').addEventListener('click', () => {
   audio.init();
   updateLibraryList();
-  document.getElementById('editor-library-panel').style.display = 'block';
+  document.getElementById('editor-library-panel').style.display = 'flex';
 });
 
 document.getElementById('btn-editor-toggle').addEventListener('click', () => {
@@ -3200,6 +3278,21 @@ document.getElementById('btn-demo-level').addEventListener('click', () => {
     adjustEditHeight(-editY); // reset editing height to 0
   }
 });
+
+// AI generator dropdown — show the difficulty picker only for AI Pro, and run
+// the chosen generator (the four hidden buttons still hold the actual logic).
+{
+  const genSelect = document.getElementById('ai-generator-select');
+  const diffSelect = document.getElementById('architect-difficulty');
+  const syncDiff = () => { diffSelect.style.display = (genSelect.value === 'aipro') ? '' : 'none'; };
+  genSelect.addEventListener('change', syncDiff);
+  syncDiff();
+  document.getElementById('btn-ai-run').addEventListener('click', () => {
+    const map = { aigen: 'btn-ai-generate', aipro: 'btn-ai-architect', aipro2: 'btn-ai-architect2', aipro3: 'btn-ai-architect3' };
+    const id = map[genSelect.value];
+    if (id) document.getElementById(id).click();
+  });
+}
 
 document.getElementById('btn-ai-generate').addEventListener('click', () => {
   audio.init();
@@ -3370,7 +3463,7 @@ document.getElementById('btn-save-local').addEventListener('click', () => {
 
 document.getElementById('btn-load-local').addEventListener('click', () => {
   updateLibraryList();
-  document.getElementById('editor-library-panel').style.display = 'block';
+  document.getElementById('editor-library-panel').style.display = 'flex';
 });
 document.getElementById('btn-library-upload').addEventListener('click', () => {
   document.getElementById('import-file-input').click();
@@ -3381,6 +3474,11 @@ document.getElementById('btn-close-library').addEventListener('click', () => {
 
 // Export Level
 document.getElementById('btn-export-level').addEventListener('click', () => {
+  // Persist the name/theme the user typed into the form so the exported JSON
+  // (and the download filename) carry the current level name, not a stale one.
+  const typedName = document.getElementById('level-name-input').value.trim();
+  if (typedName) activeLevel.name = typedName;
+  activeLevel.world = parseInt(document.getElementById('world-select').value, 10) || 0;
   const data = serializeLevel(activeLevel);
   document.getElementById('modal-title').textContent = 'EXPORT LEVEL';
   document.getElementById('modal-textarea').value = data;
@@ -3601,6 +3699,23 @@ function animate(timestamp) {
   requestAnimationFrame(animate);
   const now = timestamp/1000;
   const dt = Math.min(clock.getDelta(), 0.1);
+
+  // Spatial starfield: a star dome around the camera, only while playing (not in
+  // the editor). Recentre on the camera so it never clips, and drift it slowly
+  // so orbiting the level sweeps the stars across the view for depth.
+  if (starfield) {
+    const playing = !(isEditMode && !isPlaytesting);
+    starfield.visible = playing;
+    if (playing) {
+      starfield.position.copy(camera.position);
+      starfield.rotation.y += dt * 0.010;
+      starfield.rotation.x += dt * 0.004;
+      // Mystic zoom: slow breathing scale so the dome drifts in and out.
+      const pulse = 1 + Math.sin(now * 0.18) * 0.14;
+      starfield.scale.setScalar(pulse);
+      starUniforms.uTime.value = now; // drive per-star twinkle
+    }
+  }
 
   // Paused: freeze all game logic, only drive the free-orbit camera and render.
   if (isPaused && (!isEditMode || isPlaytesting)) {
@@ -4011,8 +4126,11 @@ function setHelpOpen(open) {
   document.getElementById('help-overlay')?.classList.toggle('open', open);
 }
 
-// START
-loadPreMadeLevel(0);
-requestAnimationFrame(animate);
-
-console.log('%c🟧 GOOSE — 3D & Level Editor Ready', 'color:#ff6600;font-size:18px;');
+// START — fetch the level manifest, load level 1, then begin the render loop.
+(async () => {
+  premadeLevels = await loadLevelManifest();
+  if (!premadeLevels.length) console.warn('No /level/*.json files found — start the game from a web server.');
+  loadPreMadeLevel(0);
+  requestAnimationFrame(animate);
+  console.log(`%c🟧 GOOSE — 3D & Level Editor Ready (${premadeLevels.length} levels)`, 'color:#ff6600;font-size:18px;');
+})();

@@ -233,6 +233,48 @@ export class AudioEngine {
     });
   }
 
+  // ── Editor: compound-object grouping cues ──
+  playGroupStart() {
+    if (!this.ready) return;
+    const t = this._now();
+    [440, 660].forEach((f, i) => {
+      const osc = this.ctx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = f;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t + i*0.06);
+      gain.gain.exponentialRampToValueAtTime(0.16, t + i*0.06 + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.06 + 0.22);
+      osc.connect(gain); gain.connect(this.master);
+      osc.start(t + i*0.06); osc.stop(t + i*0.06 + 0.25);
+    });
+  }
+
+  // A short tick when a block joins the group; pitch climbs with the count.
+  playGroupAdd(count = 1) {
+    if (!this.ready) return;
+    const t = this._now();
+    const osc = this.ctx.createOscillator(); osc.type = 'square';
+    osc.frequency.value = Math.min(1500, 660 + (count - 1) * 80);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.12, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    osc.connect(gain); gain.connect(this.master);
+    osc.start(t); osc.stop(t + 0.1);
+  }
+
+  playGroupEnd() {
+    if (!this.ready) return;
+    const t = this._now();
+    [660, 440].forEach((f, i) => {
+      const osc = this.ctx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = f;
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, t + i*0.05);
+      gain.gain.exponentialRampToValueAtTime(0.14, t + i*0.05 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i*0.05 + 0.18);
+      osc.connect(gain); gain.connect(this.master);
+      osc.start(t + i*0.05); osc.stop(t + i*0.05 + 0.2);
+    });
+  }
+
   startAmbient(worldIdx) {
     if (!this.ready) return;
     this.stopAmbient();

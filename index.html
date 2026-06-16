@@ -154,26 +154,40 @@
       </select>
     </div>
     
-    <div style="display:flex; gap:8px;">
+    <div class="editor-actions">
       <button id="btn-demo-level" class="editor-btn success" title="Load the demo level that showcases every gameplay element">Demo</button>
-      <button id="btn-ai-generate" class="editor-btn success" title="Generate an AI 3D Labyrinth">AI Gen</button>
-      <select id="architect-difficulty" class="editor-select" title="Target difficulty for the Architect generator (1 = very easy, 10 = extreme)">
-        <option value="1">Diff: 1 · very easy</option>
-        <option value="2">Diff: 2</option>
-        <option value="3">Diff: 3 · easy</option>
-        <option value="4">Diff: 4</option>
-        <option value="5" selected>Diff: 5 · medium</option>
-        <option value="6">Diff: 6</option>
-        <option value="7">Diff: 7 · hard</option>
-        <option value="8">Diff: 8</option>
-        <option value="9">Diff: 9</option>
-        <option value="10">Diff: 10 · extreme</option>
-      </select>
-      <button id="btn-ai-architect" class="editor-btn success" title="Architect: build a guaranteed-solvable level scaled to the chosen difficulty, using all elements">AI Pro</button>
-      <button id="btn-ai-architect2" class="editor-btn success" title="AI Pro2: pick the design criteria, then build a guaranteed-solvable level from them">AI Pro2</button>
-      <button id="btn-ai-architect3" class="editor-btn success" title="AI Pro3: choose criteria AND their exact quantities, then build a guaranteed-solvable level">AI Pro3</button>
-      <button id="btn-toggle-slice" class="editor-btn success" title="Toggle layer slicing (hides blocks above current height)">Slice: ON</button>
-      <button id="btn-undo" class="editor-btn" title="Undo last edit (Ctrl+Z) — up to 250 steps" disabled>↶ Undo</button>
+
+      <!-- AI level generators: pick one, then press Generate -->
+      <span class="editor-ai-group" title="Pick a level generator, then press Generate">
+        <select id="ai-generator-select" class="editor-select" title="Choose which AI level generator to run">
+          <option value="aigen">AI Gen · Labyrinth</option>
+          <option value="aipro">AI Pro · Difficulty</option>
+          <option value="aipro2">AI Pro2 · Criteria</option>
+          <option value="aipro3" selected>AI Pro3 · Quantified</option>
+        </select>
+        <select id="architect-difficulty" class="editor-select" style="display:none;" title="Target difficulty for the AI Pro generator (1 = very easy, 10 = extreme)">
+          <option value="1">Diff: 1 · very easy</option>
+          <option value="2">Diff: 2</option>
+          <option value="3">Diff: 3 · easy</option>
+          <option value="4">Diff: 4</option>
+          <option value="5" selected>Diff: 5 · medium</option>
+          <option value="6">Diff: 6</option>
+          <option value="7">Diff: 7 · hard</option>
+          <option value="8">Diff: 8</option>
+          <option value="9">Diff: 9</option>
+          <option value="10">Diff: 10 · extreme</option>
+        </select>
+        <button id="btn-ai-run" class="editor-btn success" title="Run the selected level generator">⚙ Generate</button>
+      </span>
+
+      <!-- Hidden generator triggers — driven by the dropdown + Generate above -->
+      <button id="btn-ai-generate" class="editor-btn success" hidden>AI Gen</button>
+      <button id="btn-ai-architect" class="editor-btn success" hidden>AI Pro</button>
+      <button id="btn-ai-architect2" class="editor-btn success" hidden>AI Pro2</button>
+      <button id="btn-ai-architect3" class="editor-btn success" hidden>AI Pro3</button>
+
+      <button id="btn-toggle-slice" class="editor-btn danger" title="Toggle layer slicing (hides blocks above current height)">Slice: OFF</button>
+      <button id="btn-undo" class="editor-btn" title="Undo last edit (Ctrl+Z or U) — up to 250 steps" disabled>↶ Undo</button>
       <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
       <button id="btn-save-local" class="editor-btn">Save</button>
       <button id="btn-load-local" class="editor-btn">Load</button>
@@ -208,7 +222,18 @@
 
   <!-- Cursor Tooltip -->
   <div id="editor-tooltip">Normal Block <span class="tooltip-coord">(0, 0, 0)</span></div>
-  
+
+  <!-- Screen-edge glow while grouping is active -->
+  <div id="grouping-vignette"></div>
+
+  <!-- Grouping indicator: shown while O is held (compound-object grouping) -->
+  <div id="grouping-indicator">
+    <span class="group-dot"></span>
+    <span class="group-label">GROUPING OBJECT</span>
+    <span id="group-count" class="group-count">0 blocks</span>
+    <span class="group-hint">— place blocks · release <b>O</b> to finish</span>
+  </div>
+
   <!-- Floating Instructions Guide -->
   <div id="editor-instructions">
     <div class="panel-header" style="border:none; margin:0; padding:0;">Controls Guide</div>
@@ -403,6 +428,44 @@
           <div><span class="kbd">H</span> — toggle this help</div>
           <div>♪ icon (bottom-left) — background music player</div>
           <div><b>Load Level</b> / <b>Editor</b> (top) — pick a level or build your own</div>
+        </div>
+      </section>
+
+      <section class="help-sec">
+        <h3>Level editor</h3>
+        <p>Click <b>Editor</b> (top bar) to build your own level. Pick a block or item from the left <b>Toolbox</b>, then place it on the grid. Set the spawn (<b>Start</b>) and goal (<b>Exit</b>), and use <b>Playtest</b> to try your level — <b>Exit</b> returns to the editor.</p>
+        <div class="help-keys">
+          <div><span class="kbd">Left&nbsp;Click</span> — place / paint the selected tool · drag to paint a row</div>
+          <div><span class="kbd">Right&nbsp;Click</span> — erase (tap) · <b>Right&nbsp;Drag</b> — orbit the camera</div>
+          <div><span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> / <span class="kbd">Q</span><span class="kbd">E</span> — pan &amp; rotate the editor camera · wheel — zoom</div>
+          <div><span class="kbd">R</span> / <span class="kbd">F</span> — raise / lower the editing height · <b>Shift</b>+wheel or the right-side ruler also change height</div>
+          <div><span class="kbd">1</span>…<span class="kbd">9</span><span class="kbd">0</span> — quick-pick tools · <span class="kbd">X</span> — eraser · <span class="kbd">L</span> — linker</div>
+          <div><span class="kbd">Linker</span> — connect a switch/plate ➜ its bridge/platform, or pair two teleporters (source then target, <span class="kbd">Esc</span> to cancel)</div>
+          <div>Hold <span class="kbd">O</span> — group every block you place into one compound object (moves together); release to finish</div>
+          <div><span class="kbd">U</span> or <span class="kbd">Ctrl</span>+<span class="kbd">Z</span> — undo (up to 250 steps) · <b>Slice</b> — hide blocks above the current height for easier editing</div>
+        </div>
+      </section>
+
+      <section class="help-sec">
+        <h3>AI level generators</h3>
+        <p>In the editor, pick a generator from the dropdown and press <b>Generate</b>. Every AI Pro level is guaranteed solvable.</p>
+        <div class="help-keys">
+          <div><b>AI&nbsp;Gen · Labyrinth</b> — a quick randomised 3D maze.</div>
+          <div><b>AI&nbsp;Pro · Difficulty</b> — a guaranteed-solvable level scaled to a difficulty from 1 (very easy) to 10 (extreme), using all element types.</div>
+          <div><b>AI&nbsp;Pro2 · Criteria</b> — tick the design criteria you want (verticality, teleporters, crates, hazards, enemies …); a size slider scales the amount.</div>
+          <div><b>AI&nbsp;Pro3 · Quantified</b> — like Pro2, but set the <b>exact quantity</b> for each of 20 criteria, plus tuning knobs (path length, arena size, par strictness, platform speed …).</div>
+        </div>
+      </section>
+
+      <section class="help-sec">
+        <h3>Save, load &amp; share levels</h3>
+        <p>Name your level and pick a <b>Theme</b> in the top bar, then:</p>
+        <div class="help-keys">
+          <div><b>Save</b> — store the level in your browser (localStorage) under its name.</div>
+          <div><b>Load</b> — open the library panel and pick any saved level (scroll the list); the built-in <b>Demo</b> showcases every element.</div>
+          <div><b>Export</b> — view the level as JSON to copy, or <b>Save File</b> to download a <span class="kbd">.json</span>.</div>
+          <div><b>Import</b> — paste level JSON or <b>Load File</b> to open a downloaded <span class="kbd">.json</span>.</div>
+          <div>The campaign levels load from <span class="kbd">level/1.json</span>, <span class="kbd">2.json</span>, … — finish one to roll into the next.</div>
         </div>
       </section>
 
