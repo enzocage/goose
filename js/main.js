@@ -395,8 +395,8 @@ function createBlockMesh(block, key) {
   const isExit = (x === exitPos.x && y === exitPos.y && z === exitPos.z);
   if (isExit) mat = matTileExit;
 
-  // Thin bridge visual
-  const geo = type === 'bridge' ? geoThinTile : geoTile;
+  // Thin bridge visual or cube for container
+  const geo = type === 'bridge' ? geoThinTile : (type === 'container' ? geoCube : geoTile);
   const matSide = mat.clone();
   matSide.transparent = false;
   matSide.opacity = 1.0;
@@ -447,6 +447,7 @@ function createBlockMesh(block, key) {
   block.mesh = mesh;
 
   if (type === 'container') {
+    mesh.scale.set(0.8, 0.8, 0.8);
     containerMeshes.push(mesh);
   }
 
@@ -3708,6 +3709,10 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           if (hit.hitType === 'bridge') {
             editorGhostBlock.geometry = geoThinTile;
             editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
+          } else if (hit.hitType === 'container') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.scale.set(0.8, 0.8, 0.8);
+            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
           } else if (hit.hitType === 'plutonium') {
             editorGhostBlock.geometry = geoCube;
             editorGhostBlock.scale.set(0.4, 0.4, 0.4);
@@ -3729,6 +3734,10 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           if (hit.hitType === 'bridge') {
             editorGhostBlock.geometry = geoThinTile;
             editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
+          } else if (hit.hitType === 'container') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.scale.set(0.8, 0.8, 0.8);
+            editorGhostBlock.position.set(hit.x, hit.y, hit.z);
           } else if (hit.hitType === 'plutonium') {
             editorGhostBlock.geometry = geoCube;
             editorGhostBlock.scale.set(0.4, 0.4, 0.4);
@@ -3763,6 +3772,10 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           if (selectedTool === 'bridge') {
             editorGhostBlock.geometry = geoThinTile;
             targetY = hit.y + 0.4;
+          } else if (selectedTool === 'container') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.scale.set(0.8, 0.8, 0.8);
+            targetY = hit.y;
           } else if (selectedTool === 'plutonium') {
             editorGhostBlock.geometry = geoCube;
             editorGhostBlock.scale.set(0.4, 0.4, 0.4);
@@ -5033,16 +5046,28 @@ function animate(timestamp) {
     exitRing.position.y = exitPos.y + 0.5 + Math.sin(now*3)*0.04;
   }
 
-  // Animate container block blinking (purple/black every 200ms)
+  // Animate container blocks (purple/black blinking every 200ms, rotating, pulsating size)
   const containerBlink = (now % 0.4) < 0.2;
-  if (containerBlink) {
-    matContainer.color.setHex(0xa21caf);      // Purple
-    matContainer.emissive.setHex(0xd946ef);   // Glowing purple
-    matContainer.emissiveIntensity = 1.5;
-  } else {
-    matContainer.color.setHex(0x050005);      // Near black
-    matContainer.emissive.setHex(0x000000);   // Dark
-    matContainer.emissiveIntensity = 0.0;
+  for (const mesh of containerMeshes) {
+    mesh.rotation.y += 0.015;
+    mesh.rotation.x = 0;
+    mesh.rotation.z = 0;
+
+    const pulse = 0.72 + 0.16 * (Math.sin(now * 6.0) + 1.0) / 2.0;
+    mesh.scale.set(pulse, pulse, pulse);
+
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    mats.forEach(m => {
+      if (containerBlink) {
+        m.color.setRGB(0.5, 0, 0.6);
+        m.emissive.setRGB(0.85, 0, 0.93);
+        m.emissiveIntensity = 2.0;
+      } else {
+        m.color.setRGB(0.02, 0, 0.02);
+        m.emissive.setRGB(0, 0, 0);
+        m.emissiveIntensity = 0.0;
+      }
+    });
   }
 
   updateTimerUI();
@@ -5077,7 +5102,7 @@ const HELP_ELEMENTS = [
   { name:'Prism',          swatch:'background:#ffdd44;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);', desc:'Collect them all — usually required to finish a level.' },
   { name:'Mini-Prism',     swatch:'background:#00ccff;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.7);', desc:'Shrinks you for a short time — climb walls and squeeze under bridges.' },
   { name:'Plutonium',      swatch:'background:#a21caf;box-shadow:0 0 8px #a21caf;border:1px solid #d946ef;border-radius:4px;transform:scale(0.8);', desc:'Purple-black pulsating small cube. Starts a countdown timer once collected.' },
-  { name:'Container',      swatch:'animation: containerBlinkAnimation 0.4s steps(2, start) infinite; border:1px solid #a21caf;', desc:'Purple and black blinking container block. Step on it to deposit your Plutonium before the timer runs out.' },
+  { name:'Container',      swatch:'animation: plutoniumBtnPulse 1.5s ease-in-out infinite; border:1px solid #d946ef; border-radius:4px;', desc:'Purple/black pulsating cube (same colors as Plutonium, but larger and slower rotating). Step on it to deposit your Plutonium before the timer runs out.' },
 ];
 
 (function setupHelp() {

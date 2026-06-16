@@ -675,12 +675,8 @@
   #help-body::-webkit-scrollbar { width: 8px; }
   #help-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
 
-  /* Container purple/black blinking animation */
-  .container-blink-swatch {
-    animation: containerBlinkAnimation 0.4s steps(2, start) infinite;
-  }
-  @keyframes containerBlinkAnimation {
-    0%, 100% { background: #050005; box-shadow: none; }
-    50% { background: #d946ef; box-shadow: 0 0 8px #d946ef; }
+  /* Container pulsating style matching Plutonium */
+  .container-btn {
+    animation: plutoniumBtnPulse 1.5s ease-in-out infinite;
   }
 
