@@ -76,7 +76,7 @@ let comboCount = 0;
 let comboTimer = 0;
 let elapsedTime = 0;
 let miniTimer = 0;
-let isCarryingPlutonium = false;
+let isCarryingPlutonium = 0;
 let plutoniumTimer = 30.0;
 let depositedPlutonium = 0;
 let containerMeshes = [];
@@ -221,7 +221,7 @@ function getPlayerWorldPos(gx, gy, gz, miniState) {
 
 function buildLevel3D(level3D) {
   clearLevel();
-  isCarryingPlutonium = false;
+  isCarryingPlutonium = 0;
   plutoniumTimer = level3D.plutoniumTimeLimit ?? 30.0;
   depositedPlutonium = 0;
   hasCollectedPlutoniumThisRun = false;
@@ -1306,14 +1306,15 @@ function onRollComplete() {
     if (block.type === 'switch') triggerSwitch(key);
     if (block.type === 'teleporter') triggerTeleport(key);
     
-    if (block.type === 'container' && isCarryingPlutonium) {
-      isCarryingPlutonium = false;
-      depositedPlutonium++;
+    if (block.type === 'container' && isCarryingPlutonium > 0) {
+      const depositedCount = isCarryingPlutonium;
+      depositedPlutonium += depositedCount;
+      isCarryingPlutonium = 0;
       const phud = document.getElementById('plutonium-hud-bar');
       if (phud) phud.style.display = 'none';
       audio.playCollect();
       flashScreen('#00ffaa');
-      showMessage('PLUTONIUM DEPOSITED IN CONTAINER!', 2.5);
+      showMessage(`${depositedCount} PLUTONIUM DEPOSITED IN CONTAINER!`, 2.5);
 
       updatePlutoniumUI();
 
@@ -1521,7 +1522,7 @@ function checkPrismCollection(gx, gy, gz) {
         prism.mesh.material = matPlutoniumGlow.clone();
         setTimeout(() => prismsGroup.remove(mesh), 200);
       }
-      isCarryingPlutonium = true;
+      isCarryingPlutonium++;
       plutoniumTimer = activeLevel.plutoniumTimeLimit ?? 30.0;
       if (!hasCollectedPlutoniumThisRun) {
         hasCollectedPlutoniumThisRun = true;
@@ -4583,7 +4584,7 @@ function animate(timestamp) {
         const pulse = 1 + Math.sin(now * 0.18) * 0.14;
         starfield.scale.setScalar(pulse);
         let isLowPlutonium = false;
-        if (isCarryingPlutonium && !isPaused) {
+        if (isCarryingPlutonium > 0 && !isPaused) {
           const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
           if (plutoniumTimer <= limit * 0.1) {
             isLowPlutonium = true;
@@ -4610,11 +4611,11 @@ function animate(timestamp) {
     // Game time
     if (!isLevelComplete) { elapsedTime += dt; gameTimer += dt; }
     
-    if (isCarryingPlutonium && !isLevelComplete && !isPaused) {
+    if (isCarryingPlutonium > 0 && !isLevelComplete && !isPaused) {
       plutoniumTimer -= dt;
       if (plutoniumTimer <= 0) {
         plutoniumTimer = 0;
-        isCarryingPlutonium = false;
+        isCarryingPlutonium = 0;
         const phud = document.getElementById('plutonium-hud-bar');
         if (phud) phud.style.display = 'none';
         loseLife('plutonium exploded');
