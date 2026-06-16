@@ -278,7 +278,38 @@
   .ai2-option small { font-size: 9px; opacity: 0.55; }
   .ai2-size-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; font-size: 11px; }
   .ai2-size-row input[type=range] { flex-grow: 1; accent-color: var(--green); cursor: pointer; }
-  #ai2-size-val { width: 18px; text-align: center; color: var(--accent2); font-weight: bold; }
+  #ai2-size-val, #ai3-size-val { width: 18px; text-align: center; color: var(--accent2); font-weight: bold; }
+
+  /* AI Pro3 — quantified criteria modal */
+  .ai3-modal { width: 660px; }
+  .ai3-scroll { max-height: 48vh; overflow-y: auto; padding-right: 6px; margin-right: -6px; }
+  .ai3-scroll::-webkit-scrollbar { width: 8px; }
+  .ai3-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+  .ai3-subtitle {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent2);
+    opacity: 0.85; margin: 14px 0 8px; font-weight: bold;
+  }
+  .ai3-subtitle:first-child { margin-top: 0; }
+  .ai3-subtitle small { font-weight: normal; opacity: 0.6; text-transform: none; letter-spacing: 0; }
+  .ai3-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ai3-option {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 8px 10px; cursor: pointer; transition: all 0.15s;
+  }
+  .ai3-option:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); }
+  .ai3-option > input[type=checkbox] { accent-color: var(--green); cursor: pointer; flex-shrink: 0; }
+  .ai3-text { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; }
+  .ai3-text b { font-size: 11px; color: var(--text); }
+  .ai3-text small { font-size: 9px; opacity: 0.55; }
+  .ai3-qty {
+    width: 50px; flex-shrink: 0; text-align: center;
+    background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px; color: var(--accent2); font-size: 12px; font-weight: bold;
+    padding: 5px 4px; outline: none; -moz-appearance: textfield;
+  }
+  .ai3-qty:focus { border-color: var(--green); }
+  .ai3-option input[type=checkbox]:not(:checked) ~ .ai3-qty { opacity: 0.35; }
 
   /* Mini Cube Duration HUD bar */
   #mini-hud-bar {

@@ -1592,6 +1592,60 @@ function generateArchitectLevel2(opts) {
   return buildArchitect(P, `Architect2 · Lvl ${size}`, world);
 }
 
+// AI Pro3 — quantified Architect. Each criterion carries an exact quantity, so
+// the user dials in precise amounts (e.g. "exactly 4 crate puzzles"). Unchecked
+// element families switch off; unchecked tuning knobs fall back to the size
+// preset. The shared builder still guarantees a solvable level.
+function generateArchitectLevel3(opts) {
+  const clamp = (v, lo, hi) => isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : lo;
+  const size = clamp(opts.size || 5, 1, 10);
+  const P = architectParams(size);
+
+  // ── Tuning knobs: use the supplied value, else keep the size-based default ──
+  if (opts.pathLength   != null) P.backboneLength = clamp(opts.pathLength, 20, 250);
+  if (opts.arenaSize    != null) P.halfSize       = clamp(opts.arenaSize, 5, 20);
+  if (opts.branchLen    != null) P.branchLen      = clamp(opts.branchLen, 2, 10);
+  if (opts.parTightness != null) P.parFactor      = 1.4 - (clamp(opts.parTightness, 1, 10) - 1) / 9 * 0.8; // 1.4 → 0.6
+  P.moverSpeed = (opts.moverSpeed != null)
+    ? 0.6 + (clamp(opts.moverSpeed, 1, 10) - 1) / 9 * 1.8 // 0.6 → 2.4
+    : 1.2;
+
+  // ── Verticality: floor count, or flat when off ──
+  if (opts.verticality) { P.maxFloors = clamp(opts.floors, 1, 8); P.floorChance = Math.max(P.floorChance, 0.22); }
+  else { P.maxFloors = 0; P.floorChance = 0; }
+
+  // ── Element families: exact counts, or 0 when the family is off ──
+  P.branches    = opts.branching   ? clamp(opts.branches, 1, 30)    : 0;
+  P.teleporters = opts.teleporters ? clamp(opts.teleporters, 1, 10) : 0;
+  P.switchGates = opts.switchGates ? clamp(opts.switchGates, 1, 10) : 0;
+  P.movers      = opts.movers      ? clamp(opts.movers, 1, 12)      : 0;
+  P.crates      = opts.crates      ? clamp(opts.crates, 1, 12)      : 0;
+  P.enemies     = opts.enemies     ? clamp(opts.enemies, 1, 15)     : 0;
+  P.prisms      = opts.prisms      ? clamp(opts.prisms, 1, 30)      : 0;
+  P.miniprisms  = opts.miniprisms  ? clamp(opts.miniprisms, 1, 20)  : 0;
+
+  // ── Hazards & boosters: drive the builder via EXACT counts, not chances ──
+  P.iceChance = 0; P.boosterChance = 0; P.fragileChance = 0; P.shakerChance = 0; P.dangerChance = 0;
+  P.collapseCount = opts.collapse ? clamp(opts.collapseTiles, 1, 30) : 0;
+  P.iceCount      = opts.ice      ? clamp(opts.iceTiles, 1, 30)      : 0;
+  P.dangerCount   = opts.danger   ? clamp(opts.dangerTiles, 1, 30)   : 0;
+  P.boosterCount  = opts.boosters ? clamp(opts.boosters, 1, 15)      : 0;
+
+  // ── New AI Pro3 sections ──
+  P.secretRooms  = opts.secretRooms  ? clamp(opts.secretRooms, 1, 8)  : 0;
+  P.iceCorridors = opts.iceCorridors ? clamp(opts.iceCorridors, 1, 8) : 0;
+
+  // Collapse/danger tiles live only on optional branch cells. If those are
+  // requested but branching is off, carve a few short host spurs for them.
+  if (!P.branches && (P.collapseCount || P.dangerCount)) {
+    P.branches = Math.max(2, Math.round((P.collapseCount + P.dangerCount) / 3));
+    P.branchLen = Math.min(P.branchLen, 4);
+  }
+
+  const world = clamp(Math.floor((size - 1) / 2), 0, 4);
+  return buildArchitect(P, `Architect3 · Lvl ${size}`, world);
+}
+
 // Shared Architect builder: turns a fully-resolved parameter set into a
 // guaranteed-solvable level. Used by both AI Pro (difficulty preset) and
 // AI Pro2 (per-criterion toggles).
@@ -1715,7 +1769,7 @@ function buildArchitect(P, name, world) {
     if (!(free(g1) && free(g2) && free(plat))) continue;
     occ.set(`${g1.x},${g1.z}`, g1.y);
     occ.set(`${plat.x},${plat.z}`, plat.y);
-    setBlock(g1, 'moving', { targetX: g2.x, targetY: g2.y, targetZ: g2.z, speed: 1.2 });
+    setBlock(g1, 'moving', { targetX: g2.x, targetY: g2.y, targetZ: g2.z, speed: P.moverSpeed || 1.2 });
     setBlock(plat, 'normal');
     lvl.prisms.set(`${plat.x},${plat.y},${plat.z}`, { type: 'miniprism' });
   }
@@ -1795,6 +1849,96 @@ function buildArchitect(P, name, world) {
     const c = safeBranches[i];
     const k = `${c.x},${c.y},${c.z}`;
     if (!lvl.prisms.has(k)) lvl.prisms.set(k, { type: 'miniprism' });
+  }
+
+  // ── 8b) Geheim-Kammern (AI Pro3): enclosed bonus pockets off the backbone ──
+  // A 1-cell entrance opening into a 2-cell nook with a mini-prism, built on
+  // fresh off-path cells at the anchor's height — always optional, never blocks
+  // the critical route (mirrors the crate/mover placement contract).
+  let roomsPlaced = 0;
+  for (let a = 0; roomsPlaced < (P.secretRooms || 0) && a < (P.secretRooms || 0) * 40 + 40; a++) {
+    const anchor = path[2 + Math.floor(Math.random() * Math.max(1, path.length - 3))];
+    const anchorKey = `${anchor.x},${anchor.y},${anchor.z}`;
+    if (anchorKey === startKey || anchorKey === exitKey) continue;
+    const d = dirs[Math.floor(Math.random() * 4)];
+    const pp = perpOf(d);
+    const p = Math.random() < 0.5 ? pp : { dx: -pp.dx, dz: -pp.dz };
+    const y = anchor.y;
+    const E  = { x: anchor.x + d.dx,            y, z: anchor.z + d.dz };            // entrance
+    const R1 = { x: anchor.x + 2 * d.dx,        y, z: anchor.z + 2 * d.dz };        // reward cell
+    const R2 = { x: anchor.x + 2 * d.dx + p.dx, y, z: anchor.z + 2 * d.dz + p.dz }; // side nook
+    if (![E, R1, R2].every(colFree)) continue;
+    [E, R1, R2].forEach(c => occ.set(`${c.x},${c.z}`, c.y));
+    setBlock(E, 'normal'); setBlock(R1, 'normal'); setBlock(R2, 'normal');
+    lvl.prisms.set(`${R1.x},${R1.y},${R1.z}`, { type: 'miniprism' });
+    roomsPlaced++;
+  }
+
+  // ── 8c) Exact-count hazard placement (AI Pro3) ──
+  // When explicit counts are supplied, place precisely that many tiles instead
+  // of the chance-based styling above. Lethal/collapsing tiles go only on
+  // optional branch cells; ice/booster only on non-critical backbone cells.
+  const optBackbone = () => path.filter(c => {
+    const k = `${c.x},${c.y},${c.z}`;
+    return k !== startKey && k !== exitKey && !lvl.prisms.has(k) && lvl.blocks.get(k) && lvl.blocks.get(k).type === 'normal';
+  });
+  const optBranch = () => branchCells.filter(c => {
+    const k = `${c.x},${c.y},${c.z}`;
+    return !lvl.prisms.has(k) && lvl.blocks.get(k) && lvl.blocks.get(k).type === 'normal';
+  });
+  const placeExact = (pool, count, assign) => {
+    const shuffled = pool.sort(() => 0.5 - Math.random());
+    let placed = 0;
+    for (const c of shuffled) {
+      if (placed >= count) break;
+      const k = `${c.x},${c.y},${c.z}`;
+      const b = lvl.blocks.get(k);
+      if (!b || b.type !== 'normal' || lvl.prisms.has(k)) continue;
+      assign(b, c, k);
+      placed++;
+    }
+  };
+  // Collapse = fragile + shaker, split roughly in half (branch cells only).
+  if (typeof P.collapseCount === 'number' && P.collapseCount > 0) {
+    let n = 0;
+    placeExact(optBranch(), P.collapseCount, b => { b.type = (n++ % 2 === 0) ? 'fragile' : 'shaker'; });
+  }
+  if (typeof P.dangerCount === 'number' && P.dangerCount > 0) {
+    placeExact(optBranch(), P.dangerCount, b => { b.type = 'danger'; });
+  }
+  if (typeof P.iceCount === 'number' && P.iceCount > 0) {
+    // Prefer backbone, spill onto branches if the path runs short.
+    placeExact(optBackbone().concat(optBranch()), P.iceCount, b => { b.type = 'ice'; });
+  }
+  if (typeof P.boosterCount === 'number' && P.boosterCount > 0) {
+    placeExact(optBackbone(), P.boosterCount, b => { b.type = 'booster'; });
+  }
+
+  // ── 8d) Eis-Korridore (AI Pro3): long straight slides along the backbone ──
+  // Convert short collinear, same-height runs of non-critical backbone cells to
+  // ice, for sustained sliding (distinct from the scattered ice above).
+  if (P.iceCorridors > 0) {
+    const corrLen = 3;
+    const starts = [];
+    for (let i = 1; i + corrLen <= path.length; i++) starts.push(i);
+    starts.sort(() => 0.5 - Math.random());
+    const used = new Set();
+    let corrPlaced = 0;
+    for (const i of starts) {
+      if (corrPlaced >= P.iceCorridors) break;
+      const run = path.slice(i, i + corrLen);
+      const stepX = run[1].x - run[0].x, stepZ = run[1].z - run[0].z;
+      let ok = true;
+      for (let j = 0; j < run.length; j++) {
+        const c = run[j], k = `${c.x},${c.y},${c.z}`;
+        const collinear = j === 0 || (c.x - run[j - 1].x === stepX && c.z - run[j - 1].z === stepZ && c.y === run[0].y);
+        const b = lvl.blocks.get(k);
+        if (used.has(k) || k === startKey || k === exitKey || lvl.prisms.has(k) || !b || b.type !== 'normal' || !collinear) { ok = false; break; }
+      }
+      if (!ok) continue;
+      run.forEach(c => { const k = `${c.x},${c.y},${c.z}`; lvl.blocks.get(k).type = 'ice'; used.add(k); });
+      corrPlaced++;
+    }
   }
 
   // ── 9) Enemies on far backbone cells ──
@@ -3128,6 +3272,75 @@ document.getElementById('btn-ai-pro2-generate').addEventListener('click', () => 
   drawEditorWires();
   document.getElementById('ai-pro2-modal').style.display = 'none';
   showMessage(`AI PRO2 — ${lvl.name}`);
+});
+
+// AI Pro3 — criteria + per-criterion quantities, then generate.
+document.getElementById('btn-ai-architect3').addEventListener('click', () => {
+  audio.init();
+  document.getElementById('ai-pro3-modal').style.display = 'flex';
+});
+document.getElementById('btn-ai-pro3-close').addEventListener('click', () => {
+  document.getElementById('ai-pro3-modal').style.display = 'none';
+});
+{
+  const ai3Size = document.getElementById('ai3-size');
+  ai3Size.addEventListener('input', () => {
+    document.getElementById('ai3-size-val').textContent = ai3Size.value;
+  });
+  // Dim a row's quantity field while its criterion is unchecked.
+  document.querySelectorAll('#ai-pro3-modal .ai3-option input[type=checkbox]').forEach(cb => {
+    const qty = cb.parentElement.querySelector('.ai3-qty');
+    if (!qty) return;
+    const sync = () => { qty.disabled = !cb.checked; };
+    cb.addEventListener('change', sync);
+    sync();
+  });
+}
+document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => {
+  audio.init();
+  const cb  = id => document.getElementById(id).checked;
+  const num = id => parseInt(document.getElementById(id).value, 10);
+  // qty(name) → the quantity when the criterion is on, else false (off).
+  const qty = name => cb(`ai3-${name}`) ? num(`ai3-${name}-n`) : false;
+  // knob(name) → the custom value when enabled, else null (auto).
+  const knob = name => cb(`ai3-${name}`) ? num(`ai3-${name}-n`) : null;
+  const opts = {
+    size: num('ai3-size') || 5,
+    // Element families — boolean toggle plus an explicit quantity.
+    verticality: cb('ai3-verticality'), floors:        num('ai3-verticality-n'),
+    branching:   cb('ai3-branching'),   branches:      num('ai3-branching-n'),
+    collapse:    cb('ai3-collapse'),    collapseTiles: num('ai3-collapse-n'),
+    ice:         cb('ai3-ice'),         iceTiles:      num('ai3-ice-n'),
+    danger:      cb('ai3-danger'),      dangerTiles:   num('ai3-danger-n'),
+    // Families whose option value IS the count (number when on, false when off).
+    teleporters:  qty('teleporters'),
+    switchGates:  qty('switchGates'),
+    movers:       qty('movers'),
+    crates:       qty('crates'),
+    enemies:      qty('enemies'),
+    boosters:     qty('boosters'),
+    prisms:       qty('prisms'),
+    miniprisms:   qty('miniprisms'),
+    secretRooms:  qty('secretRooms'),
+    iceCorridors: qty('iceCorridors'),
+    // Tuning knobs — custom value when checked, otherwise auto from size.
+    pathLength:   knob('pathLength'),
+    arenaSize:    knob('arenaSize'),
+    parTightness: knob('parTightness'),
+    branchLen:    knob('branchLen'),
+    moverSpeed:   knob('moverSpeed'),
+  };
+
+  pushUndoSnapshot();
+  const lvl = generateArchitectLevel3(opts);
+  activeLevel = lvl;
+  document.getElementById('level-name-input').value = lvl.name;
+  document.getElementById('world-select').value = lvl.world;
+  adjustEditHeight(-editY); // reset edit height to 0
+  buildLevel3D(lvl);
+  drawEditorWires();
+  document.getElementById('ai-pro3-modal').style.display = 'none';
+  showMessage(`AI PRO3 — ${lvl.name}`);
 });
 
 document.getElementById('btn-clear-grid').addEventListener('click', () => {

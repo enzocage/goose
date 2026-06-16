@@ -171,6 +171,7 @@
       </select>
       <button id="btn-ai-architect" class="editor-btn success" title="Architect: build a guaranteed-solvable level scaled to the chosen difficulty, using all elements">AI Pro</button>
       <button id="btn-ai-architect2" class="editor-btn success" title="AI Pro2: pick the design criteria, then build a guaranteed-solvable level from them">AI Pro2</button>
+      <button id="btn-ai-architect3" class="editor-btn success" title="AI Pro3: choose criteria AND their exact quantities, then build a guaranteed-solvable level">AI Pro3</button>
       <button id="btn-toggle-slice" class="editor-btn success" title="Toggle layer slicing (hides blocks above current height)">Slice: ON</button>
       <button id="btn-undo" class="editor-btn" title="Undo last edit (Ctrl+Z) — up to 250 steps" disabled>↶ Undo</button>
       <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
@@ -276,6 +277,54 @@
     <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
       <button id="btn-ai-pro2-generate" class="editor-btn success">Generate</button>
       <button id="btn-ai-pro2-close" class="editor-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- AI Pro3 — dynamic criteria with per-criterion quantities -->
+<div id="ai-pro3-modal" class="modal-overlay" style="display:none; z-index: 260;">
+  <div class="modal-content ai3-modal">
+    <div class="modal-header">AI PRO3 — QUANTIFIZIERTES LEVELDESIGN</div>
+    <p class="ai2-intro">Hake die Kriterien an und lege je Kriterium die <b>Menge</b> fest (Zahlfeld). Bei den Abstimmungs-Reglern bedeutet „aus“ = automatisch aus der Größe. Das Ergebnis ist immer lösbar.</p>
+
+    <div class="ai3-scroll">
+      <div class="ai3-subtitle">Bausteine &amp; Mengen</div>
+      <div class="ai3-grid">
+        <label class="ai3-option"><input type="checkbox" id="ai3-verticality" checked><span class="ai3-text"><b>Mehrstöckig</b><small>Anzahl Etagen</small></span><input type="number" class="ai3-qty" id="ai3-verticality-n" min="1" max="8" value="3"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-branching" checked><span class="ai3-text"><b>Verzweigtes Layout</b><small>Anzahl Nebenwege</small></span><input type="number" class="ai3-qty" id="ai3-branching-n" min="1" max="30" value="8"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-teleporters" checked><span class="ai3-text"><b>Teleporter</b><small>Anzahl Portal-Paare</small></span><input type="number" class="ai3-qty" id="ai3-teleporters-n" min="1" max="10" value="2"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-switchGates" checked><span class="ai3-text"><b>Schalter-Tore</b><small>Anzahl Schalter-Brücken</small></span><input type="number" class="ai3-qty" id="ai3-switchGates-n" min="1" max="10" value="2"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-movers" checked><span class="ai3-text"><b>Bewegliche Plattformen</b><small>Anzahl Plattformen</small></span><input type="number" class="ai3-qty" id="ai3-movers-n" min="1" max="12" value="3"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-crates"><span class="ai3-text"><b>Kisten-Schieberätsel</b><small>Anzahl Rätsel</small></span><input type="number" class="ai3-qty" id="ai3-crates-n" min="1" max="12" value="2"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-collapse" checked><span class="ai3-text"><b>Einsturz-Pfade</b><small>Anzahl fragiler Felder</small></span><input type="number" class="ai3-qty" id="ai3-collapse-n" min="1" max="30" value="6"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-ice" checked><span class="ai3-text"><b>Eis-Flächen</b><small>Anzahl Eis-Felder</small></span><input type="number" class="ai3-qty" id="ai3-ice-n" min="1" max="30" value="6"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-danger" checked><span class="ai3-text"><b>Tödliche Hazards</b><small>Anzahl Spike-Felder</small></span><input type="number" class="ai3-qty" id="ai3-danger-n" min="1" max="30" value="5"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-enemies"><span class="ai3-text"><b>Verfolger-Gegner</b><small>Anzahl Gegner</small></span><input type="number" class="ai3-qty" id="ai3-enemies-n" min="1" max="15" value="3"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-boosters" checked><span class="ai3-text"><b>Tempo-Booster</b><small>Anzahl Speed-Pads</small></span><input type="number" class="ai3-qty" id="ai3-boosters-n" min="1" max="15" value="3"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-prisms" checked><span class="ai3-text"><b>Pflicht-Prismen</b><small>Anzahl Sammelziele</small></span><input type="number" class="ai3-qty" id="ai3-prisms-n" min="1" max="30" value="8"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-miniprisms" checked><span class="ai3-text"><b>Bonus-Mini-Prismen</b><small>Anzahl Belohnungen</small></span><input type="number" class="ai3-qty" id="ai3-miniprisms-n" min="1" max="20" value="5"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-secretRooms"><span class="ai3-text"><b>Geheim-Kammern</b><small>Anzahl Bonus-Räume</small></span><input type="number" class="ai3-qty" id="ai3-secretRooms-n" min="1" max="8" value="2"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-iceCorridors"><span class="ai3-text"><b>Eis-Korridore</b><small>Anzahl Rutsch-Strecken</small></span><input type="number" class="ai3-qty" id="ai3-iceCorridors-n" min="1" max="8" value="2"></label>
+      </div>
+
+      <div class="ai3-subtitle">Level-Abstimmung <small>(aus = automatisch)</small></div>
+      <div class="ai3-grid">
+        <label class="ai3-option"><input type="checkbox" id="ai3-pathLength"><span class="ai3-text"><b>Weglänge</b><small>Hauptpfad in Feldern</small></span><input type="number" class="ai3-qty" id="ai3-pathLength-n" min="20" max="250" value="80"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-arenaSize"><span class="ai3-text"><b>Arena-Größe</b><small>Spielfeld-Radius</small></span><input type="number" class="ai3-qty" id="ai3-arenaSize-n" min="5" max="20" value="10"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-parTightness"><span class="ai3-text"><b>Par-Strenge</b><small>1 = locker, 10 = knapp</small></span><input type="number" class="ai3-qty" id="ai3-parTightness-n" min="1" max="10" value="5"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-branchLen"><span class="ai3-text"><b>Nebenweg-Länge</b><small>Felder je Nebenweg</small></span><input type="number" class="ai3-qty" id="ai3-branchLen-n" min="2" max="10" value="4"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-moverSpeed"><span class="ai3-text"><b>Plattform-Tempo</b><small>1 = langsam, 10 = schnell</small></span><input type="number" class="ai3-qty" id="ai3-moverSpeed-n" min="1" max="10" value="5"></label>
+      </div>
+    </div>
+
+    <div class="ai2-size-row">
+      <label for="ai3-size">Basis-Größe / Dichte</label>
+      <input type="range" id="ai3-size" min="1" max="10" value="5">
+      <span id="ai3-size-val">5</span>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+      <button id="btn-ai-pro3-generate" class="editor-btn success">Generate</button>
+      <button id="btn-ai-pro3-close" class="editor-btn">Close</button>
     </div>
   </div>
 </div>
