@@ -45,9 +45,9 @@ export class AudioEngine {
       // --- SUBTLE & FREQUENT EVENTS ---
       roll: {
         wave: "triangle",
-        adsr: [0, 4, 0, 2], // Snappy attack, very fast decay/release
-        pitch: { startFreq: 60, slide: -3 }, // Soft low-frequency block rotation thud
-        frames: { len: 4 } // Super short, avoids cluttering audio space
+        adsr: [0, 2, 0, 1], // Snap/pop envelope
+        pitch: { startFreq: 500, slide: -80 }, // Soft micro-pop
+        frames: { len: 2 } // Extremely short, unobtrusive
       },
       enemyRoll: {
         wave: "triangle",
@@ -57,10 +57,10 @@ export class AudioEngine {
       },
       ice: {
         wave: "noise",
-        adsr: [0, 5, 0, 2],
-        pitch: { startFreq: 1800, slide: -40 },
-        filter: { cutoff: 0.85, sweep: -0.05, res: 5, mode: "hp" }, // Soft, short highpass slide whisper
-        frames: { len: 6 }
+        adsr: [1, 4, 0, 2],
+        pitch: { startFreq: 3000, slide: -20 },
+        filter: { cutoff: 0.9, sweep: -0.02, res: 2, mode: "hp" }, // Soft highpass breeze/whisper
+        frames: { len: 5 }
       },
       click: {
         wave: "triangle",
@@ -117,30 +117,31 @@ export class AudioEngine {
         frames: { len: 25 }
       },
       booster: {
-        wave: "sawtooth",
-        adsr: [2, 6, 2, 4],
-        pitch: { startFreq: 120, slide: 70 }, // Futuristic sweep-up rocket charge
-        frames: { len: 15 }
+        wave: "pulse",
+        adsr: [1, 4, 1, 2],
+        pitch: { startFreq: 350, slide: 20 },
+        pw: { start: 1024, speed: 150 }, // Soft chiptune pulse shift
+        frames: { len: 8 }
       },
       leap: {
-        wave: "noise",
-        adsr: [3, 8, 0, 4],
-        pitch: { startFreq: 2000, slide: -120 },
-        filter: { cutoff: 0.8, sweep: -0.05, res: 8, mode: "bp" }, // Heavy gust of air as player launches
-        frames: { len: 18 }
+        wave: "triangle",
+        adsr: [1, 4, 0, 2],
+        pitch: { startFreq: 220, slide: 12 }, // Gentle upward sweep
+        frames: { len: 8 }
       },
       fall: {
-        wave: "sawtooth",
-        adsr: [3, 12, 0, 10],
-        pitch: { startFreq: 500, slide: -12 },
-        vibrato: { speed: 0.6, depth: 30 }, // Tragic, wobbly pitch-fall slide down into the void
-        frames: { len: 35 }
+        wave: "triangle",
+        adsr: [2, 10, 0, 8],
+        pitch: { startFreq: 350, slide: -8 }, // Soft descending pitch slide
+        vibrato: { speed: 0.4, depth: 15 },
+        frames: { len: 25 }
       },
       land: {
         wave: "triangle",
-        adsr: [0, 8, 0, 4],
-        pitch: { startFreq: 120, slide: -8 }, // Heavy, bassy block landing impact thump
-        frames: { len: 10 }
+        adsr: [0, 5, 0, 2],
+        pitch: { startFreq: 90, slide: -3 }, // Low warm felt thump
+        filter: { cutoff: 0.18, sweep: -0.01, res: 1, mode: "lp" },
+        frames: { len: 6 }
       },
       shrink: {
         wave: "triangle",
