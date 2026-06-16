@@ -84,7 +84,7 @@ matContainer.onBeforeCompile = (shader) => {
     '#include <color_fragment>',
     `#include <color_fragment>
      float coord = vLocalPosition.x + vLocalPosition.y + vLocalPosition.z;
-     float pattern = sin(coord * 15.70796327); // 5.0 * PI
+     float pattern = sin(coord * 25.13274123); // 8.0 * PI
      float stripe = smoothstep(-0.015, 0.015, pattern);
      vec3 stripeColor = mix(vec3(0.07, 0.07, 0.07), vec3(1.0, 0.8, 0.0), stripe);
      diffuseColor.rgb = stripeColor;`
