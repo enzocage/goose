@@ -1238,11 +1238,16 @@ function setMeshOpacity(mesh, opacity, depthWrite, keepTopOpaque = false, baseOp
   if (!mesh || !mesh.material) return;
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   mats.forEach(m => {
-    if (opacity < 1.0) {
+    if (opacity === 0.0) {
       m.visible = false;
       m.transparent = false;
       m.opacity = 1.0;
       m.depthWrite = false;
+    } else if (opacity < 1.0) {
+      m.visible = true;
+      m.transparent = true;
+      m.opacity = opacity;
+      m.depthWrite = depthWrite;
     } else {
       m.visible = true;
       m.transparent = false;
@@ -3883,7 +3888,120 @@ function updateLivesUI() {
 let transparencyUpdateTimer = 0;
 
 function updateDynamicTransparency() {
-  // Transparency effects removed at user request
+  if (isEditMode && !isPlaytesting) {
+    // Reset all opacities in editor mode (rely entirely on slice mode wireframes)
+    activeBlocks.forEach(block => {
+      if (block.mesh) {
+        const isInactiveBridge = (block.type === 'bridge' && block.active === false);
+        const isBelow = (sliceModeActive && block.y < editY);
+        if (isInactiveBridge || isBelow) {
+          setMeshOpacity(block.mesh, 0.0, false);
+        } else {
+          setMeshOpacity(block.mesh, 1.0, true);
+        }
+      }
+    });
+    return;
+  }
+
+  if (!playerCube) return;
+
+  // 1. Gather player target points (7 points covering the cube)
+  const targets = [
+    playerCube.position.clone(), // Center
+    playerCube.position.clone().add(new THREE.Vector3(0, 0.45, 0)),  // Top
+    playerCube.position.clone().add(new THREE.Vector3(0, -0.45, 0)), // Bottom
+    playerCube.position.clone().add(new THREE.Vector3(0.45, 0, 0)),   // Right
+    playerCube.position.clone().add(new THREE.Vector3(-0.45, 0, 0)),  // Left
+    playerCube.position.clone().add(new THREE.Vector3(0, 0, 0.45)),   // Front
+    playerCube.position.clone().add(new THREE.Vector3(0, 0, -0.45))   // Back
+  ];
+
+  // 2. Gather candidate meshes that can obstruct view
+  const candidateMeshes = [];
+  const meshToBlockMap = new Map();
+  activeBlocks.forEach(block => {
+    if (block.mesh) {
+      candidateMeshes.push(block.mesh);
+      meshToBlockMap.set(block.mesh.id, block);
+    }
+  });
+
+  const obstructingBlocks = new Set();
+  const raycaster = new THREE.Raycaster();
+  const camPos = camera.position;
+
+  targets.forEach(targetPos => {
+    const dir = targetPos.clone().sub(camPos);
+    const dist = dir.length();
+    if (dist < 0.1) return;
+    
+    dir.normalize();
+    raycaster.set(camPos, dir);
+    raycaster.far = dist - 0.05; // Stop before target to avoid self-intersection
+    
+    const intersects = raycaster.intersectObjects(candidateMeshes, true);
+    intersects.forEach(hit => {
+      let obj = hit.object;
+      while (obj && !meshToBlockMap.has(obj.id)) {
+        obj = obj.parent;
+      }
+      if (obj) {
+        const block = meshToBlockMap.get(obj.id);
+        if (block) {
+          // Only obstruct if the obstructing block is strictly higher than the player's grid height
+          const playerGridY = Math.round(playerCube.position.y);
+          if (block.y > playerGridY) {
+            obstructingBlocks.add(block);
+          }
+        }
+      }
+    });
+  });
+
+  // 3. Apply opacity
+  activeBlocks.forEach(block => {
+    if (block.mesh) {
+      const isObstructing = obstructingBlocks.has(block);
+      const isInactiveBridge = (block.type === 'bridge' && block.active === false);
+      const isBelow = (sliceModeActive && block.y < editY);
+      
+      if (isInactiveBridge || isBelow) {
+        // Inactive or sliced blocks are always wireframe
+        setMeshOpacity(block.mesh, 0.0, false);
+      } else if (isObstructing) {
+        // Block blocks a part of the player -> make transparent
+        setMeshOpacity(block.mesh, 0.2, false);
+        
+        // Traverse children (spikes, switches, plate buttons, etc.)
+        block.mesh.traverse(child => {
+          if (child !== block.mesh && child.material) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach(mat => {
+              mat.transparent = true;
+              mat.opacity = 0.2;
+              mat.depthWrite = false;
+            });
+          }
+        });
+      } else {
+        // Normal fully opaque block
+        setMeshOpacity(block.mesh, 1.0, true);
+        
+        // Restore children
+        block.mesh.traverse(child => {
+          if (child !== block.mesh && child.material) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach(mat => {
+              mat.transparent = false;
+              mat.opacity = 1.0;
+              mat.depthWrite = true;
+            });
+          }
+        });
+      }
+    }
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════
