@@ -154,14 +154,14 @@ function clearLevel() {
   [tilesGroup, prismsGroup, effectsGroup, bridgeGroup].forEach(g => {
     while (g.children.length) {
       const c = g.children[g.children.length-1];
-      if (c.material) c.material.dispose();
-      c.children.forEach(ch => { if (ch.material) ch.material.dispose(); });
+      disposeMaterial(c.material);
+      c.children.forEach(ch => { disposeMaterial(ch.material); });
       g.remove(c);
     }
   });
   if (playerCube) { worldGroup.remove(playerCube); playerCube = null; }
   if (exitRing) { worldGroup.remove(exitRing); exitRing = null; }
-  enemies.forEach(en => { worldGroup.remove(en.cube); if (en.cube.material) en.cube.material.dispose(); });
+  enemies.forEach(en => { worldGroup.remove(en.cube); disposeMaterial(en.cube.material); });
   enemies = [];
   enemyMarkers.clear(); // marker meshes live in prismsGroup, disposed by the group loop above
   particles.length = 0; trailParts.length = 0;
@@ -351,10 +351,18 @@ function createBlockMesh(block, key) {
 
   // Thin bridge visual
   const geo = type === 'bridge' ? geoThinTile : geoTile;
-  const mesh = new THREE.Mesh(geo, mat.clone());
-  mesh.material.transparent = true;
-  mesh.material.opacity = 1.0;
-  mesh.material.depthWrite = true;
+  const matSide = mat.clone();
+  matSide.transparent = true;
+  matSide.opacity = 1.0;
+  matSide.depthWrite = true;
+
+  const matTop = mat.clone();
+  matTop.transparent = true;
+  matTop.opacity = 1.0;
+  matTop.depthWrite = true;
+
+  const materials = [matSide, matSide, matTop, matSide, matSide, matSide];
+  const mesh = new THREE.Mesh(geo, materials);
   mesh.position.set(x, type === 'bridge' ? y + 0.4 : y, z);
   mesh.castShadow = true; mesh.receiveShadow = true;
   mesh.userData = { key, type };
@@ -377,8 +385,7 @@ function createBlockMesh(block, key) {
   const line = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color:eColor, transparent:true, opacity:0.35 }));
   mesh.add(line);
   if (isInactiveBridge) {
-    mesh.material.opacity = 0.18;
-    mesh.material.depthWrite = false;
+    setMeshOpacity(mesh, 0.18, false);
   }
   tilesGroup.add(mesh);
   block.mesh = mesh;
@@ -811,7 +818,7 @@ function executePush(block, toX, toY, toZ, dirX, dirZ) {
               } else {
                 audio.playCrateFall();
                 tilesGroup.remove(mesh);
-                if (mesh.material) mesh.material.dispose();
+                disposeMaterial(mesh.material);
               }
             } else {
               requestAnimationFrame(fall);
@@ -896,7 +903,7 @@ function triggerSwitchTargets(key, activeState) {
             if (mesh.scale.y > 0.02) requestAnimationFrame(shrink);
             else {
               tilesGroup.remove(mesh);
-              if (mesh.material) mesh.material.dispose();
+              disposeMaterial(mesh.material);
             }
           };
           shrink();
@@ -1220,10 +1227,37 @@ function breakFragileBlock(key) {
       if (mesh.scale.x > 0.05) requestAnimationFrame(shrink);
       else {
         tilesGroup.remove(mesh);
-        if (mesh.material) mesh.material.dispose();
+        disposeMaterial(mesh.material);
       }
     };
     shrink();
+  }
+}
+
+function setMeshOpacity(mesh, opacity, depthWrite, keepTopOpaque = false, baseOpacity = 1.0) {
+  if (!mesh || !mesh.material) return;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  mats.forEach(m => {
+    if (opacity < 1.0) {
+      m.visible = false;
+      m.transparent = false;
+      m.opacity = 1.0;
+      m.depthWrite = false;
+    } else {
+      m.visible = true;
+      m.transparent = false;
+      m.opacity = 1.0;
+      m.depthWrite = true;
+    }
+  });
+}
+
+function disposeMaterial(mat) {
+  if (!mat) return;
+  if (Array.isArray(mat)) {
+    mat.forEach(m => { if (m && typeof m.dispose === 'function') m.dispose(); });
+  } else if (typeof mat.dispose === 'function') {
+    mat.dispose();
   }
 }
 
@@ -1263,7 +1297,7 @@ function triggerSwitch(key) {
             if (mesh.scale.y > 0.02) requestAnimationFrame(shrink);
             else {
               tilesGroup.remove(mesh);
-              if (mesh.material) mesh.material.dispose();
+              disposeMaterial(mesh.material);
             }
           };
           shrink();
@@ -2177,16 +2211,16 @@ function enterEditMode() {
   editorGridHelper.position.set(0.5, editY - 0.49, 0.5);
   scene.add(editorGridHelper);
 
-  // Add Transparent Grid Plane
+  // Add Transparent Grid Plane (disabled at user request to avoid transparency)
   const planeGeo = new THREE.PlaneGeometry(50, 50);
-  const planeMat = new THREE.MeshBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false });
+  const planeMat = new THREE.MeshBasicMaterial({ visible: false });
   editorGridPlane = new THREE.Mesh(planeGeo, planeMat);
   editorGridPlane.rotation.x = -Math.PI/2;
   editorGridPlane.position.set(0.5, editY - 0.49, 0.5);
   scene.add(editorGridPlane);
 
-  // Add Ghost Block
-  editorGhostBlock = new THREE.Mesh(geoTile, new THREE.MeshBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.4 }));
+  // Add Ghost Block (wireframe representation to avoid transparency)
+  editorGhostBlock = new THREE.Mesh(geoTile, new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true }));
   scene.add(editorGhostBlock);
 
   editorWiresGroup = new THREE.Group();
@@ -2260,8 +2294,7 @@ function updateEditorSlicing() {
       if (b.mesh) {
         b.mesh.visible = true;
         const baseOpacity = b.type === 'bridge' ? 0.4 : 1.0;
-        b.mesh.material.opacity = baseOpacity;
-        b.mesh.material.depthWrite = (baseOpacity === 1.0);
+        setMeshOpacity(b.mesh, baseOpacity, baseOpacity === 1.0, true, baseOpacity);
       }
       if (b.pillar) b.pillar.visible = true;
     });
@@ -2282,56 +2315,44 @@ function updateEditorSlicing() {
     } else {
       b.mesh.visible = true;
       if (b.pillar) b.pillar.visible = true;
-      const baseOpacity = b.type === 'bridge' ? (b.active === false ? 0.18 : 0.4) : 1.0;
-      if (b.y < editY) {
-        b.mesh.material.opacity = Math.min(0.4, baseOpacity);
-        b.mesh.material.depthWrite = false;
+      const isBelow = (sliceModeActive && b.y < editY);
+      const isInactiveBridge = (b.type === 'bridge' && b.active === false);
+      if (isBelow || isInactiveBridge) {
+        setMeshOpacity(b.mesh, 0.0, false);
       } else {
-        b.mesh.material.opacity = baseOpacity;
-        b.mesh.material.depthWrite = (baseOpacity === 1.0);
+        setMeshOpacity(b.mesh, 1.0, true);
       }
     }
   });
   activePrisms.forEach((p, k) => {
     if (!p.mesh) return;
     const py = k.split(',').map(Number)[1]; // key is "x,y,z" → y is the height
-    if (sliceModeActive && py > editY) {
+    if (sliceModeActive && (py > editY || py < editY)) {
       p.mesh.visible = false;
     } else {
       p.mesh.visible = true;
-      if (py < editY) {
-        p.mesh.material.transparent = true;
-        p.mesh.material.opacity = 0.4;
-      } else {
-        p.mesh.material.transparent = false;
-        p.mesh.material.opacity = 1.0;
-      }
+      p.mesh.material.transparent = false;
+      p.mesh.material.opacity = 1.0;
     }
   });
   enemyMarkers.forEach((m, k) => {
     const ey = k.split(',').map(Number)[1];
-    if (sliceModeActive && ey > editY) {
+    if (sliceModeActive && (ey > editY || ey < editY)) {
       m.visible = false;
     } else {
       m.visible = true;
-      const below = ey < editY;
-      m.material.transparent = below;
-      m.material.opacity = below ? 0.35 : 1.0;
+      m.material.transparent = false;
+      m.material.opacity = 1.0;
     }
   });
   movingPlatformsList.forEach(mp => {
     const mpy = Math.round(mp.position.y);
-    if (sliceModeActive && mpy > editY) {
+    if (sliceModeActive && (mpy > editY || mpy < editY)) {
       mp.mesh.visible = false;
     } else {
       mp.mesh.visible = true;
-      if (mpy < editY) {
-        mp.mesh.material.transparent = true;
-        mp.mesh.material.opacity = 0.4;
-      } else {
-        mp.mesh.material.transparent = false;
-        mp.mesh.material.opacity = 1.0;
-      }
+      mp.mesh.material.transparent = false;
+      mp.mesh.material.opacity = 1.0;
     }
   });
   applyXrayOverride();
@@ -2342,19 +2363,7 @@ function updateEditorSlicing() {
 // updateEditorSlicing so it survives slicing, edits and rebuilds. Prisms, enemy
 // markers and edge outlines stay opaque to remain readable.
 function applyXrayOverride() {
-  if (!xrayMode) return;
-  activeBlocks.forEach(b => {
-    if (b.mesh && b.mesh.visible) {
-      b.mesh.material.opacity = XRAY_OPACITY;
-      b.mesh.material.depthWrite = false;
-    }
-  });
-  movingPlatformsList.forEach(mp => {
-    if (mp.mesh && mp.mesh.visible) {
-      mp.mesh.material.opacity = XRAY_OPACITY;
-      mp.mesh.material.depthWrite = false;
-    }
-  });
+  // X-ray transparency removed at user request
 }
 
 function toggleXray() {
@@ -2507,7 +2516,7 @@ function drawEditorWires() {
   // Clear old
   while (editorWiresGroup.children.length) {
     const c = editorWiresGroup.children[0];
-    if (c.material) c.material.dispose();
+    disposeMaterial(c.material);
     editorWiresGroup.remove(c);
   }
 
@@ -2657,8 +2666,8 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
     const m = enemyMarkers.get(key);
     if (m) {
       prismsGroup.remove(m);
-      if (m.material) m.material.dispose();
-      m.children.forEach(ch => { if (ch.geometry) ch.geometry.dispose(); if (ch.material) ch.material.dispose(); });
+      disposeMaterial(m.material);
+      m.children.forEach(ch => { if (ch.geometry) ch.geometry.dispose(); disposeMaterial(ch.material); });
     }
     enemyMarkers.delete(key);
     removed = true;
@@ -2666,7 +2675,7 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
   if (kinds.includes('prism') && activeLevel.prisms.has(key)) {
     activeLevel.prisms.delete(key);
     const p = activePrisms.get(key);
-    if (p && p.mesh) { prismsGroup.remove(p.mesh); if (p.mesh.material) p.mesh.material.dispose(); }
+    if (p && p.mesh) { prismsGroup.remove(p.mesh); disposeMaterial(p.mesh.material); }
     activePrisms.delete(key);
     removed = true;
   }
@@ -2689,8 +2698,8 @@ function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
       }
       if (b.mesh) {
         tilesGroup.remove(b.mesh);
-        if (b.mesh.material) b.mesh.material.dispose();
-        b.mesh.children.forEach(ch => { if (ch.material) ch.material.dispose(); });
+        disposeMaterial(b.mesh.material);
+        b.mesh.children.forEach(ch => { disposeMaterial(ch.material); });
       }
       activeBlocks.delete(key);
     }
@@ -3874,119 +3883,7 @@ function updateLivesUI() {
 let transparencyUpdateTimer = 0;
 
 function updateDynamicTransparency() {
-  if (isEditMode && !isPlaytesting) {
-    // Reset all opacities in editor mode
-    activeBlocks.forEach(block => {
-      if (block.mesh) {
-        const defaultOpacity = block.type === 'bridge' ? (block.active === false ? 0.18 : 0.4) : 1.0;
-        const targetOpacity = xrayMode ? XRAY_OPACITY : defaultOpacity;
-        block.mesh.material.opacity = targetOpacity;
-        block.mesh.material.depthWrite = !xrayMode && (defaultOpacity === 1.0);
-      }
-    });
-    return;
-  }
-
-  const targets = [];
-  
-  // 1. Focus targets that we want to keep visible
-  if (playerCube) {
-    targets.push(playerCube.position.clone().add(new THREE.Vector3(0, 0.5, 0)));
-  }
-  if (exitRing) {
-    targets.push(new THREE.Vector3(exitPos.x, exitPos.y + 0.5, exitPos.z));
-  }
-  activePrisms.forEach(prism => {
-    targets.push(new THREE.Vector3(prism.x, prism.y + 0.5, prism.z));
-  });
-  
-  activeBlocks.forEach(block => {
-    if (block.type === 'switch' || block.type === 'pressureplate') {
-      targets.push(new THREE.Vector3(block.x, block.y + 0.5, block.z));
-    } else {
-      const keyAbove = `${block.x},${block.y + 1},${block.z}`;
-      if (!activeBlocks.has(keyAbove)) {
-        targets.push(new THREE.Vector3(block.x, block.y + 0.5, block.z));
-      }
-    }
-  });
-
-  // 2. Gather candidate meshes that can obstruct view
-  const candidateMeshes = [];
-  const meshToBlockMap = new Map();
-  activeBlocks.forEach(block => {
-    if (block.mesh) {
-      candidateMeshes.push(block.mesh);
-      meshToBlockMap.set(block.mesh.id, block);
-    }
-  });
-
-  const obstructingBlocks = new Set();
-  const raycaster = new THREE.Raycaster();
-  const camPos = camera.position;
-
-  targets.forEach(targetPos => {
-    const dir = targetPos.clone().sub(camPos);
-    const dist = dir.length();
-    if (dist < 0.1) return;
-    
-    dir.normalize();
-    raycaster.set(camPos, dir);
-    raycaster.far = dist - 0.05; // Stop before target to avoid self-intersection
-    
-    const intersects = raycaster.intersectObjects(candidateMeshes, true);
-    intersects.forEach(hit => {
-      let obj = hit.object;
-      while (obj && !meshToBlockMap.has(obj.id)) {
-        obj = obj.parent;
-      }
-      if (obj) {
-        const block = meshToBlockMap.get(obj.id);
-        if (block) {
-          // Only obstruct if the obstructing block is strictly higher than the target block's grid height
-          const targetGridY = Math.round(targetPos.y - 0.5);
-          if (block.y > targetGridY) {
-            obstructingBlocks.add(block);
-          }
-        }
-      }
-    });
-  });
-
-  // 3. Apply opacity
-  activeBlocks.forEach(block => {
-    if (block.mesh) {
-      const isObstructing = obstructingBlocks.has(block);
-      const baseOpacity = block.type === 'bridge' ? (block.active === false ? 0.18 : 0.4) : 1.0;
-      
-      if (isObstructing) {
-        block.mesh.material.opacity = Math.min(baseOpacity, 0.2);
-        block.mesh.material.depthWrite = false;
-        
-        block.mesh.traverse(child => {
-          if (child !== block.mesh && child.material) {
-            if (child.userData.originalOpacity === undefined) {
-              child.userData.originalOpacity = child.material.opacity !== undefined ? child.material.opacity : 1.0;
-            }
-            child.material.opacity = Math.min(child.userData.originalOpacity, 0.2);
-            child.material.depthWrite = false;
-          }
-        });
-      } else {
-        const targetOpacity = xrayMode ? XRAY_OPACITY : baseOpacity;
-        block.mesh.material.opacity = targetOpacity;
-        block.mesh.material.depthWrite = !xrayMode && (baseOpacity === 1.0);
-        
-        block.mesh.traverse(child => {
-          if (child !== block.mesh && child.material) {
-            const orig = child.userData.originalOpacity !== undefined ? child.userData.originalOpacity : 1.0;
-            child.material.opacity = xrayMode ? Math.min(orig, XRAY_OPACITY) : orig;
-            child.material.depthWrite = !xrayMode && (orig === 1.0);
-          }
-        });
-      }
-    }
-  });
+  // Transparency effects removed at user request
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -4502,6 +4399,8 @@ function tryPlaceBlock(stepUp) {
   const remaining = limit - placedBlocksCount;
   showMessage(`BLOCK PLACED! (${remaining} LEFT)`, 1.0);
 }
+
+// Duplicate setMeshOpacity and disposeMaterial declarations removed
 
 // START — fetch the level manifest, load level 1, then begin the render loop.
 (async () => {

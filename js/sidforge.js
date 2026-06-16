@@ -305,7 +305,9 @@ class SidCoreProcessor extends AudioWorkletProcessor {
               sfx.arpTimer = 0;
               sfx.arpStep = ((sfx.arpStep || 0) + 1) % sfx.arp.offsets.length;
             }
-            const arpOffset = sfx.arp.offsets[sfx.arpStep || 0];
+            let arpOffset = sfx.arp.offsets[sfx.arpStep || 0];
+            // Make arpeggio far more subtle by scaling down the pitch range/intervals and rounding to integers
+            arpOffset = Math.round(arpOffset * 0.5);
             modFreq *= Math.pow(2.0, arpOffset / 12.0);
           }
 
@@ -644,7 +646,8 @@ class SidCoreProcessor extends AudioWorkletProcessor {
     
     for (let v = 0; v < 3; v++) {
       const voice = this.voices[v];
-      const vol = (this.voiceAlloc[v] === "music") ? this.musicVolume : this.sfxVolume;
+      const isArpSfx = (this.voiceAlloc[v] && this.voiceAlloc[v] !== "music" && this.voiceAlloc[v].arp);
+      const vol = (this.voiceAlloc[v] === "music") ? this.musicVolume : (this.sfxVolume * (isArpSfx ? 0.35 : 1.0));
       const outVal = voiceOutputs[v] * vol;
       
       if (voice.filterEnabled) {
