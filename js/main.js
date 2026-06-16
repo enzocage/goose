@@ -81,6 +81,7 @@ let plutoniumTimer = 30.0;
 let depositedPlutonium = 0;
 let containerMeshes = [];
 let hasCollectedPlutoniumThisRun = false;
+let plutoniumWarningSoundTimer = 0.0;
 let fallVelY = 0;
 
 let cameraTarget = new THREE.Vector3(2, 0, 2);
@@ -509,9 +510,9 @@ function createPrismMesh(key, p) {
   const mesh = new THREE.Mesh(isPlutonium ? geoCube : geoPrism, mat);
   if (isMiniPrism) mesh.scale.set(0.6, 0.6, 0.6);
   else if (isPlutonium) mesh.scale.set(0.4, 0.4, 0.4);
-  mesh.position.set(px, py + 0.55, pz);
+  mesh.position.set(px, isPlutonium ? py + 1.0 : py + 0.55, pz);
   mesh.castShadow = true;
-  mesh.userData = { key, type: p.type, isMiniPrism, isPlutonium, baseY: py + 0.55 };
+  mesh.userData = { key, type: p.type, isMiniPrism, isPlutonium, baseY: isPlutonium ? py + 1.0 : py + 0.55 };
   prismsGroup.add(mesh);
   p.mesh = mesh;
 }
@@ -3686,7 +3687,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           } else if (hit.hitType === 'plutonium') {
             editorGhostBlock.geometry = geoCube;
             editorGhostBlock.scale.set(0.4, 0.4, 0.4);
-            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+            editorGhostBlock.position.set(hit.x, hit.y + 1.0, hit.z);
           } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
             editorGhostBlock.geometry = geoPrism;
             if (hit.hitType === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
@@ -3707,7 +3708,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           } else if (hit.hitType === 'plutonium') {
             editorGhostBlock.geometry = geoCube;
             editorGhostBlock.scale.set(0.4, 0.4, 0.4);
-            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+            editorGhostBlock.position.set(hit.x, hit.y + 1.0, hit.z);
           } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
             editorGhostBlock.geometry = geoPrism;
             if (hit.hitType === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
@@ -3741,7 +3742,7 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           } else if (selectedTool === 'plutonium') {
             editorGhostBlock.geometry = geoCube;
             editorGhostBlock.scale.set(0.4, 0.4, 0.4);
-            targetY = hit.y + 0.55;
+            targetY = hit.y + 1.0;
           } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
             editorGhostBlock.geometry = geoPrism;
             if (selectedTool === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
@@ -4581,7 +4582,19 @@ function animate(timestamp) {
         starfield.rotation.x += dt * 0.004;
         const pulse = 1 + Math.sin(now * 0.18) * 0.14;
         starfield.scale.setScalar(pulse);
-        starUniforms.uTime.value = now;
+        let isLowPlutonium = false;
+        if (isCarryingPlutonium && !isPaused) {
+          const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
+          if (plutoniumTimer <= limit * 0.1) {
+            isLowPlutonium = true;
+          }
+        }
+        if (isLowPlutonium) {
+          // Rapid flickering of uTime and randomized phase shifts to create a chaotic star flicker
+          starUniforms.uTime.value = now * 25.0 + (Math.random() < 0.5 ? 5.0 : 0.0);
+        } else {
+          starUniforms.uTime.value = now;
+        }
       }
     }
   }
@@ -4606,10 +4619,20 @@ function animate(timestamp) {
         if (phud) phud.style.display = 'none';
         loseLife('plutonium exploded');
       } else {
+        const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
+        if (plutoniumTimer <= limit * 0.1) {
+          plutoniumWarningSoundTimer -= dt;
+          if (plutoniumWarningSoundTimer <= 0) {
+            audio.playPlutoniumWarning();
+            plutoniumWarningSoundTimer = 0.25; // Play alarm beep every 250ms
+          }
+        } else {
+          plutoniumWarningSoundTimer = 0.0;
+        }
+
         const phudFill = document.getElementById('plutonium-hud-fill');
         const phudText = document.getElementById('plutonium-hud-text');
         if (phudFill && phudText) {
-          const limit = activeLevel.plutoniumTimeLimit ?? 30.0;
           const pct = Math.max(0, Math.min(100, (plutoniumTimer / limit) * 100));
           phudFill.style.width = pct + '%';
           phudText.textContent = `PLUTONIUM: ${plutoniumTimer.toFixed(1)}s`;
@@ -4953,10 +4976,13 @@ function animate(timestamp) {
   // skip those so we don't write NaN into their position and cull them.
   for (const child of prismsGroup.children) {
     if (child.userData && child.userData.baseY !== undefined) {
-      child.position.y = child.userData.baseY + Math.sin(now*2.5 + child.position.x*1.3)*0.12;
-      child.rotation.y += 0.025; child.rotation.x += 0.015;
-
       if (child.userData.isPlutonium) {
+        // Plutonium rotates only horizontally, at 3x normal speed (300%), and stays centered vertically
+        child.position.y = child.userData.baseY;
+        child.rotation.y += 0.075; // 0.025 * 3
+        child.rotation.x = 0;
+        child.rotation.z = 0;
+
         // Purple-black pulsation (scale between 0.32 and 0.48, color/emissive oscillates)
         const pulse = 0.32 + 0.16 * (Math.sin(now * 6.0) + 1.0) / 2.0;
         child.scale.set(pulse, pulse, pulse);
@@ -4968,6 +4994,9 @@ function animate(timestamp) {
           m.emissive.setRGB(colorVal * 0.85, 0, colorVal * 0.93);
           m.emissiveIntensity = 0.5 + colorVal * 2.0;
         });
+      } else {
+        child.position.y = child.userData.baseY + Math.sin(now*2.5 + child.position.x*1.3)*0.12;
+        child.rotation.y += 0.025; child.rotation.x += 0.015;
       }
     }
   }

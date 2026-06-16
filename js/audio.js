@@ -469,6 +469,15 @@ export class AudioEngine {
         pitch: { startFreq: 220 },
         arp: { offsets: [0, 4, 7, 12, 16, 19, 24], speed: 2 },
         frames: { len: 35 }
+      },
+      // Threatening warning alarm sound when plutonium is about to explode
+      plutoniumWarning: {
+        wave: "sawtooth+noise",
+        adsr: [0, 8, 0, 6],
+        pitch: { startFreq: 110, slide: -4 },
+        vibrato: { speed: 1.0, depth: 30 },
+        filter: { cutoff: 0.4, sweep: 0.05, res: 10, mode: "lp" },
+        frames: { len: 12 }
       }
     };
   }
@@ -749,6 +758,12 @@ export class AudioEngine {
     this._resumeCtx();
     if (!this.ready || !this.sid) return;
     this.sid.playSfx('aiGenerate');
+  }
+
+  playPlutoniumWarning() {
+    this._resumeCtx();
+    if (!this.ready || !this.sid) return;
+    this.sid.playSfx('plutoniumWarning');
   }
 
   playPlace(tool) {
