@@ -3943,7 +3943,11 @@ function updateDynamicTransparency() {
       if (obj) {
         const block = meshToBlockMap.get(obj.id);
         if (block) {
-          obstructingBlocks.add(block);
+          // Only obstruct if the obstructing block is strictly higher than the target block's grid height
+          const targetGridY = Math.round(targetPos.y - 0.5);
+          if (block.y > targetGridY) {
+            obstructingBlocks.add(block);
+          }
         }
       }
     });
