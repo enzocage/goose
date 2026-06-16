@@ -2325,7 +2325,7 @@ function updateEditorSlicing() {
       const isBelow = (sliceModeActive && b.y < editY);
       const isInactiveBridge = (b.type === 'bridge' && b.active === false);
       if (isBelow || isInactiveBridge) {
-        setMeshOpacity(b.mesh, 0.0, false);
+        setMeshOpacity(b.mesh, 0.2, false);
       } else {
         setMeshOpacity(b.mesh, 1.0, true);
       }
@@ -2334,32 +2334,35 @@ function updateEditorSlicing() {
   activePrisms.forEach((p, k) => {
     if (!p.mesh) return;
     const py = k.split(',').map(Number)[1]; // key is "x,y,z" → y is the height
-    if (sliceModeActive && (py > editY || py < editY)) {
+    if (sliceModeActive && py > editY) {
       p.mesh.visible = false;
     } else {
       p.mesh.visible = true;
-      p.mesh.material.transparent = false;
-      p.mesh.material.opacity = 1.0;
+      const below = (sliceModeActive && py < editY);
+      p.mesh.material.transparent = below;
+      p.mesh.material.opacity = below ? 0.2 : 1.0;
     }
   });
   enemyMarkers.forEach((m, k) => {
     const ey = k.split(',').map(Number)[1];
-    if (sliceModeActive && (ey > editY || ey < editY)) {
+    if (sliceModeActive && ey > editY) {
       m.visible = false;
     } else {
       m.visible = true;
-      m.material.transparent = false;
-      m.material.opacity = 1.0;
+      const below = (sliceModeActive && ey < editY);
+      m.material.transparent = below;
+      m.material.opacity = below ? 0.2 : 1.0;
     }
   });
   movingPlatformsList.forEach(mp => {
     const mpy = Math.round(mp.position.y);
-    if (sliceModeActive && (mpy > editY || mpy < editY)) {
+    if (sliceModeActive && mpy > editY) {
       mp.mesh.visible = false;
     } else {
       mp.mesh.visible = true;
-      mp.mesh.material.transparent = false;
-      mp.mesh.material.opacity = 1.0;
+      const below = (sliceModeActive && mpy < editY);
+      mp.mesh.material.transparent = below;
+      mp.mesh.material.opacity = below ? 0.2 : 1.0;
     }
   });
   applyXrayOverride();
@@ -3891,13 +3894,13 @@ let transparencyUpdateTimer = 0;
 
 function updateDynamicTransparency() {
   if (isEditMode && !isPlaytesting) {
-    // Reset all opacities in editor mode (rely entirely on slice mode wireframes)
+    // Reset all opacities in editor mode (rely entirely on slice mode transparency)
     activeBlocks.forEach(block => {
       if (block.mesh) {
         const isInactiveBridge = (block.type === 'bridge' && block.active === false);
         const isBelow = (sliceModeActive && block.y < editY);
         if (isInactiveBridge || isBelow) {
-          setMeshOpacity(block.mesh, 0.0, false);
+          setMeshOpacity(block.mesh, 0.2, false);
         } else {
           setMeshOpacity(block.mesh, 1.0, true);
         }
@@ -3908,7 +3911,9 @@ function updateDynamicTransparency() {
         const mpy = Math.round(mp.position.y);
         const isBelow = (sliceModeActive && mpy < editY);
         if (isBelow) {
-          mp.mesh.visible = false;
+          mp.mesh.visible = true;
+          mp.mesh.material.transparent = true;
+          mp.mesh.material.opacity = 0.2;
         } else {
           mp.mesh.visible = true;
           mp.mesh.material.transparent = false;
@@ -4001,20 +4006,20 @@ function updateDynamicTransparency() {
       const isBelow = (sliceModeActive && block.y < editY);
       
       if (isInactiveBridge || isBelow) {
-        // Inactive or sliced blocks are always wireframe
-        setMeshOpacity(block.mesh, 0.0, false);
+        // Inactive or sliced blocks are always translucent
+        setMeshOpacity(block.mesh, 0.2, false);
       } else if (isObstructing) {
-        // Block blocks a part of the player -> make completely transparent (wireframe edges only)
-        setMeshOpacity(block.mesh, 0.0, false);
+        // Block blocks a part of the player -> make transparent (translucent solid faces)
+        setMeshOpacity(block.mesh, 0.2, false);
         
-        // Hide child props completely (spikes, switches, plate buttons, etc.)
+        // Traverse children (spikes, switches, plate buttons, etc.) and make transparent
         block.mesh.traverse(child => {
           if (child !== block.mesh && child.material) {
             const mats = Array.isArray(child.material) ? child.material : [child.material];
             mats.forEach(mat => {
-              mat.visible = false;
-              mat.transparent = false;
-              mat.opacity = 1.0;
+              mat.visible = true;
+              mat.transparent = true;
+              mat.opacity = 0.2;
               mat.depthWrite = false;
             });
           }
@@ -4047,12 +4052,16 @@ function updateDynamicTransparency() {
       const isBelow = (sliceModeActive && mpy < editY);
       
       if (isBelow) {
-        mp.mesh.visible = false;
+        mp.mesh.visible = true;
+        mp.mesh.material.transparent = true;
+        mp.mesh.material.opacity = 0.2;
       } else {
+        mp.mesh.visible = true;
         if (isObstructing) {
-          mp.mesh.visible = false; // Hide platform completely to ensure player block is fully visible
+          mp.mesh.material.transparent = true;
+          mp.mesh.material.opacity = 0.2;
+          mp.mesh.material.depthWrite = false;
         } else {
-          mp.mesh.visible = true;
           mp.mesh.material.transparent = false;
           mp.mesh.material.opacity = 1.0;
           mp.mesh.material.depthWrite = true;
