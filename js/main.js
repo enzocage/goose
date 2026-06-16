@@ -4004,16 +4004,17 @@ function updateDynamicTransparency() {
         // Inactive or sliced blocks are always wireframe
         setMeshOpacity(block.mesh, 0.0, false);
       } else if (isObstructing) {
-        // Block blocks a part of the player -> make transparent
-        setMeshOpacity(block.mesh, 0.2, false);
+        // Block blocks a part of the player -> make completely transparent (wireframe edges only)
+        setMeshOpacity(block.mesh, 0.0, false);
         
-        // Traverse children (spikes, switches, plate buttons, etc.)
+        // Hide child props completely (spikes, switches, plate buttons, etc.)
         block.mesh.traverse(child => {
           if (child !== block.mesh && child.material) {
             const mats = Array.isArray(child.material) ? child.material : [child.material];
             mats.forEach(mat => {
-              mat.transparent = true;
-              mat.opacity = 0.2;
+              mat.visible = false;
+              mat.transparent = false;
+              mat.opacity = 1.0;
               mat.depthWrite = false;
             });
           }
@@ -4022,11 +4023,12 @@ function updateDynamicTransparency() {
         // Normal fully opaque block
         setMeshOpacity(block.mesh, 1.0, true);
         
-        // Restore children
+        // Restore child props to visible
         block.mesh.traverse(child => {
           if (child !== block.mesh && child.material) {
             const mats = Array.isArray(child.material) ? child.material : [child.material];
             mats.forEach(mat => {
+              mat.visible = true;
               mat.transparent = false;
               mat.opacity = 1.0;
               mat.depthWrite = true;
@@ -4047,12 +4049,10 @@ function updateDynamicTransparency() {
       if (isBelow) {
         mp.mesh.visible = false;
       } else {
-        mp.mesh.visible = true;
         if (isObstructing) {
-          mp.mesh.material.transparent = true;
-          mp.mesh.material.opacity = 0.2;
-          mp.mesh.material.depthWrite = false;
+          mp.mesh.visible = false; // Hide platform completely to ensure player block is fully visible
         } else {
+          mp.mesh.visible = true;
           mp.mesh.material.transparent = false;
           mp.mesh.material.opacity = 1.0;
           mp.mesh.material.depthWrite = true;
