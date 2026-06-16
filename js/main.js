@@ -1296,6 +1296,19 @@ function onRollComplete() {
       audio.playCollect();
       flashScreen('#00ffaa');
       showMessage('PLUTONIUM DEPOSITED IN CONTAINER!', 2.5);
+
+      // New level win condition: immediately win if all plutonium elements are deposited
+      let totalPlutonium = 0;
+      activePrisms.forEach(p => {
+        if (p.type === 'plutonium') totalPlutonium++;
+      });
+      let totalContainers = 0;
+      activeBlocks.forEach(b => {
+        if (b.type === 'container') totalContainers++;
+      });
+      if (totalPlutonium > 0 && totalContainers > 0 && depositedPlutonium >= totalPlutonium) {
+        completeLevel();
+      }
     }
     
     // Danger block death
@@ -1561,7 +1574,11 @@ function checkLevelComplete() {
     else if (p.type !== 'miniprism' && !p.collected) remaining++;
   });
   if (remaining === 0) {
-    if (totalPlutonium > 0 && depositedPlutonium < totalPlutonium) {
+    let totalContainers = 0;
+    activeBlocks.forEach(b => {
+      if (b.type === 'container') totalContainers++;
+    });
+    if (totalPlutonium > 0 && totalContainers > 0 && depositedPlutonium < totalPlutonium) {
       showMessage(`DEPOSIT ALL PLUTONIUM FIRST! (${depositedPlutonium}/${totalPlutonium})`, 2.0);
       return;
     }
