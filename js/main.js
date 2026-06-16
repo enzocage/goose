@@ -4404,7 +4404,7 @@ function startEnemyRoll(enemy, dx, dz) {
   audio.playEnemyRoll();
 }
 
-function loseLife() {
+function loseLife(cause) {
   if (playerInvincible) return;
   playerLives--;
   const isGameOver = playerLives <= 0;
@@ -4419,7 +4419,11 @@ function loseLife() {
   // Override message and set invincibility AFTER respawn
   playerInvincible = true;
   playerInvincibleTimer = PLAYER_INVINCIBLE_DURATION;
-  showMessage(isGameOver ? 'GAME OVER!' : `LIFE LOST — ${playerLives} LEFT`, isGameOver ? 2.2 : 1.5);
+  
+  const msg = cause
+    ? (isGameOver ? `${cause.toUpperCase()}! GAME OVER!` : `${cause.toUpperCase()}! LIFE LOST — ${playerLives} LEFT`)
+    : (isGameOver ? 'GAME OVER!' : `LIFE LOST — ${playerLives} LEFT`);
+  showMessage(msg, isGameOver ? 2.2 : 1.5);
 }
 
 function updateLivesUI() {
@@ -4600,9 +4604,7 @@ function animate(timestamp) {
         isCarryingPlutonium = false;
         const phud = document.getElementById('plutonium-hud-bar');
         if (phud) phud.style.display = 'none';
-        showMessage('PLUTONIUM EXPLODED!', 2.0);
-        audio.playDamage();
-        respawnPlayer();
+        loseLife('plutonium exploded');
       } else {
         const phudFill = document.getElementById('plutonium-hud-fill');
         const phudText = document.getElementById('plutonium-hud-text');
