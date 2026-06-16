@@ -80,6 +80,7 @@ let isCarryingPlutonium = false;
 let plutoniumTimer = 30.0;
 let depositedPlutonium = 0;
 let containerMeshes = [];
+let hasCollectedPlutoniumThisRun = false;
 let fallVelY = 0;
 
 let cameraTarget = new THREE.Vector3(2, 0, 2);
@@ -222,6 +223,7 @@ function buildLevel3D(level3D) {
   isCarryingPlutonium = false;
   plutoniumTimer = level3D.plutoniumTimeLimit ?? 30.0;
   depositedPlutonium = 0;
+  hasCollectedPlutoniumThisRun = false;
   const phud = document.getElementById('plutonium-hud-bar');
   if (phud) phud.style.display = 'none';
 
@@ -504,9 +506,9 @@ function createPrismMesh(key, p) {
   if (isMiniPrism) mat = matMiniPrism.clone();
   else if (isPlutonium) mat = matPlutonium.clone();
 
-  const mesh = new THREE.Mesh(geoPrism, mat);
+  const mesh = new THREE.Mesh(isPlutonium ? geoCube : geoPrism, mat);
   if (isMiniPrism) mesh.scale.set(0.6, 0.6, 0.6);
-  else if (isPlutonium) mesh.scale.set(0.8, 0.8, 0.8);
+  else if (isPlutonium) mesh.scale.set(0.4, 0.4, 0.4);
   mesh.position.set(px, py + 0.55, pz);
   mesh.castShadow = true;
   mesh.userData = { key, type: p.type, isMiniPrism, isPlutonium, baseY: py + 0.55 };
@@ -1503,7 +1505,12 @@ function checkPrismCollection(gx, gy, gz) {
       }
       isCarryingPlutonium = true;
       plutoniumTimer = activeLevel.plutoniumTimeLimit ?? 30.0;
-      showMessage('PLUTONIUM COLLECTED! DEPOSIT IN CONTAINER', 3.0);
+      if (!hasCollectedPlutoniumThisRun) {
+        hasCollectedPlutoniumThisRun = true;
+        showMessage('deposit in container', 0.5);
+      } else {
+        showMessage('PLUTONIUM COLLECTED! DEPOSIT IN CONTAINER', 3.0);
+      }
       const phud = document.getElementById('plutonium-hud-bar');
       if (phud) phud.style.display = 'block';
     } else {
@@ -3655,11 +3662,17 @@ renderer.domElement.addEventListener('mousemove', (e) => {
         // Set ghost block color, geometry and position dynamically based on tool
         if (selectedTool === 'eraser') {
           editorGhostBlock.material.color.setHex(0xff3355);
+          editorGhostBlock.scale.set(1, 1, 1);
           if (hit.hitType === 'bridge') {
             editorGhostBlock.geometry = geoThinTile;
             editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
-          } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism' || hit.hitType === 'plutonium') {
+          } else if (hit.hitType === 'plutonium') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.scale.set(0.4, 0.4, 0.4);
+            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+          } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
             editorGhostBlock.geometry = geoPrism;
+            if (hit.hitType === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
             editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
           } else if (hit.hitType === 'enemy') {
             editorGhostBlock.geometry = geoCube;
@@ -3670,11 +3683,17 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           }
         } else if (selectedTool === 'linker') {
           editorGhostBlock.material.color.setHex(0xffaa00);
+          editorGhostBlock.scale.set(1, 1, 1);
           if (hit.hitType === 'bridge') {
             editorGhostBlock.geometry = geoThinTile;
             editorGhostBlock.position.set(hit.x, hit.y + 0.4, hit.z);
-          } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism' || hit.hitType === 'plutonium') {
+          } else if (hit.hitType === 'plutonium') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.scale.set(0.4, 0.4, 0.4);
+            editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
+          } else if (hit.hitType === 'prism' || hit.hitType === 'miniprism') {
             editorGhostBlock.geometry = geoPrism;
+            if (hit.hitType === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
             editorGhostBlock.position.set(hit.x, hit.y + 0.55, hit.z);
           } else {
             editorGhostBlock.geometry = geoTile;
@@ -3697,12 +3716,18 @@ renderer.domElement.addEventListener('mousemove', (e) => {
           if (currentGroupId !== null && BLOCK_TOOLS.includes(selectedTool)) ghostColor = 0xffbb33;
 
           editorGhostBlock.material.color.setHex(ghostColor);
+          editorGhostBlock.scale.set(1, 1, 1);
           let targetY = hit.y;
           if (selectedTool === 'bridge') {
             editorGhostBlock.geometry = geoThinTile;
             targetY = hit.y + 0.4;
-          } else if (selectedTool === 'prism' || selectedTool === 'miniprism' || selectedTool === 'plutonium') {
+          } else if (selectedTool === 'plutonium') {
+            editorGhostBlock.geometry = geoCube;
+            editorGhostBlock.scale.set(0.4, 0.4, 0.4);
+            targetY = hit.y + 0.55;
+          } else if (selectedTool === 'prism' || selectedTool === 'miniprism') {
             editorGhostBlock.geometry = geoPrism;
+            if (selectedTool === 'miniprism') editorGhostBlock.scale.set(0.6, 0.6, 0.6);
             targetY = hit.y + 0.55;
           } else if (selectedTool === 'start' || selectedTool === 'exit' || selectedTool === 'enemy') {
             // Marker preview floats where the player cube / exit ring appears
@@ -4507,17 +4532,7 @@ function animate(timestamp) {
   const now = timestamp/1000;
   const dt = Math.min(clock.getDelta(), 0.1);
 
-  // Update container materials blinking (black and yellow alternate at 2Hz)
-  if (containerMeshes.length > 0) {
-    const blink = (Math.sin(now * Math.PI * 4) + 1) / 2;
-    containerMeshes.forEach(mesh => {
-      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      mats.forEach(m => {
-        m.emissive.setRGB(blink * 1.0, blink * 0.8, 0);
-        m.emissiveIntensity = blink * 1.5;
-      });
-    });
-  }
+
 
   // Dynamic transparency update (throttled for high performance)
   transparencyUpdateTimer++;
@@ -4921,6 +4936,20 @@ function animate(timestamp) {
     if (child.userData && child.userData.baseY !== undefined) {
       child.position.y = child.userData.baseY + Math.sin(now*2.5 + child.position.x*1.3)*0.12;
       child.rotation.y += 0.025; child.rotation.x += 0.015;
+
+      if (child.userData.isPlutonium) {
+        // Purple-black pulsation (scale between 0.32 and 0.48, color/emissive oscillates)
+        const pulse = 0.32 + 0.16 * (Math.sin(now * 6.0) + 1.0) / 2.0;
+        child.scale.set(pulse, pulse, pulse);
+
+        const colorVal = (Math.sin(now * 6.0) + 1.0) / 2.0;
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach(m => {
+          m.color.setRGB(colorVal * 0.5, 0, colorVal * 0.6);
+          m.emissive.setRGB(colorVal * 0.85, 0, colorVal * 0.93);
+          m.emissiveIntensity = 0.5 + colorVal * 2.0;
+        });
+      }
     }
   }
 
@@ -4963,8 +4992,8 @@ const HELP_ELEMENTS = [
   { name:'Exit',           swatch:'background:#00ffaa;border-radius:50%;', desc:'The goal ring — reach it (with every prism) to clear the level.' },
   { name:'Prism',          swatch:'background:#ffdd44;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);', desc:'Collect them all — usually required to finish a level.' },
   { name:'Mini-Prism',     swatch:'background:#00ccff;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.7);', desc:'Shrinks you for a short time — climb walls and squeeze under bridges.' },
-  { name:'Plutonium',      swatch:'background:#d946ef;box-shadow:0 0 8px #d946ef;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:scale(0.8);', desc:'Purple glowing collectible. Starts a countdown timer once collected.' },
-  { name:'Container',      swatch:'background:repeating-linear-gradient(45deg,#ffd300,#ffd300 4px,#111 4px,#111 8px);border:1px solid #ffd300;', desc:'Yellow/black blinking container. Step on it to deposit your Plutonium before the timer runs out.' },
+  { name:'Plutonium',      swatch:'background:#a21caf;box-shadow:0 0 8px #a21caf;border:1px solid #d946ef;border-radius:4px;transform:scale(0.8);', desc:'Purple-black pulsating small cube. Starts a countdown timer once collected.' },
+  { name:'Container',      swatch:'background:repeating-linear-gradient(45deg,#ff1111,#ff1111 4px,#ffcc00 4px,#ffcc00 8px);border:1px solid #ff1111;', desc:'Red/yellow striped container block. Step on it to deposit your Plutonium before the timer runs out.' },
 ];
 
 (function setupHelp() {

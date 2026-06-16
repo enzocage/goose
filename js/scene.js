@@ -1,6 +1,38 @@
 import * as THREE from 'three';
 import { TILE_SIZE, CUBE_S } from './constants.js';
 
+function createContainerTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  
+  // Base: red
+  ctx.fillStyle = '#ff1111';
+  ctx.fillRect(0, 0, 128, 128);
+  
+  // 5 stripes fit on a cube edge length.
+  // Using 45 degree angle: a line goes from (x, 0) to (x + 128, 128).
+  // The spacing between diagonal stripes is 128 / 2.5 = 51.2
+  // The line width is 128 / 5 = 25.6
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 128 / 5;
+  
+  const spacing = 128 / 2.5;
+  for (let offset = -128; offset < 256; offset += spacing) {
+    ctx.beginPath();
+    ctx.moveTo(offset, 0);
+    ctx.lineTo(offset + 128, 128);
+    ctx.stroke();
+  }
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  return texture;
+}
+
 /* ═══ THREE.JS SETUP: renderer, scene, camera, lights, materials, geometries, groups ═══ */
 const container = document.getElementById('canvas-container');
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
@@ -55,9 +87,9 @@ const matPressurePlate = new THREE.MeshStandardMaterial({ color:'#2244aa', rough
 const matDanger     = new THREE.MeshStandardMaterial({ color:'#221111', roughness:0.4, metalness:0.1, emissive:'#ff2233', emissiveIntensity:0.8 });
 const matShaker     = new THREE.MeshStandardMaterial({ color:'#554444', roughness:0.9, metalness:0.0, emissive:'#221111', emissiveIntensity:0.15 });
 const matBooster    = new THREE.MeshStandardMaterial({ color:'#223322', roughness:0.3, metalness:0.2, emissive:'#ffcc00', emissiveIntensity:0.95 });
-const matPlutonium  = new THREE.MeshStandardMaterial({ color:'#a21caf', roughness:0.1, metalness:0.3, emissive:'#d946ef', emissiveIntensity:1.5 });
+const matPlutonium  = new THREE.MeshStandardMaterial({ color:'#110011', roughness:0.25, metalness:0.3, emissive:'#a21caf', emissiveIntensity:1.0 });
 const matPlutoniumGlow = new THREE.MeshStandardMaterial({ color:'#ffffff', roughness:0.1, metalness:0.1, emissive:'#d946ef', emissiveIntensity:2.0 });
-const matContainer   = new THREE.MeshStandardMaterial({ color:'#111111', roughness:0.4, metalness:0.2, emissive:'#000000', emissiveIntensity:0.0 });
+const matContainer   = new THREE.MeshStandardMaterial({ roughness:0.4, metalness:0.2, map: createContainerTexture() });
 
 
 /* Shared geometries */

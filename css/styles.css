@@ -361,18 +361,20 @@
     text-shadow: 0 1px 3px rgba(0,0,0,0.8), 0 0 4px #d946ef;
   }
 
-  /* Blinking animation for container button tool icon */
-  .container-blink-btn {
-    animation: containerToolBlink 1.5s step-end infinite;
+  /* Pulsating animation for plutonium button tool icon */
+  .plutonium-btn {
+    animation: plutoniumBtnPulse 1.5s ease-in-out infinite;
   }
-  @keyframes containerToolBlink {
+  @keyframes plutoniumBtnPulse {
     0%, 100% {
-      background: repeating-linear-gradient(45deg, #ffd300, #ffd300 4px, #111 4px, #111 8px) !important;
-      border-color: #ffd300 !important;
+      background: #a21caf !important;
+      box-shadow: 0 0 8px #d946ef !important;
+      border-color: #d946ef !important;
     }
     50% {
-      background: #111 !important;
-      border-color: #333 !important;
+      background: #000000 !important;
+      box-shadow: 0 0 2px rgba(162, 28, 175, 0.2) !important;
+      border-color: #330033 !important;
     }
   }
 
