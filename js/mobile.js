@@ -16,6 +16,7 @@
    ═══════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 import { S, audio } from './state.js';
+import { BLOCK_TOOLS } from './constants.js';
 import { camera, renderer } from './scene.js';
 import { respawnPlayer, executeRollBack } from './gameplay.js';
 import {
