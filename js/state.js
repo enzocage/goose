@@ -62,6 +62,7 @@ export const S = {
   repeatMoveCode: null,     // the movement key currently held for repeat
   repeatMoveDir: { x:0, z:0 },
   moveRepeatTimer: 0,
+  repeatStepCount: 0,
   rollStartGridPos: { x:0, y:0, z:0 },
   rollPreState: null,       // snapshot so a mid-step reverse can undo it
   boosterMovesActive: 0,

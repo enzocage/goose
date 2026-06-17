@@ -63,6 +63,7 @@ function startTouchRepeat(x, z) {
   S.repeatMoveCode = 'Touch';
   S.keysPressed['Touch'] = true;   // the gameloop repeats while this stays true
   S.moveRepeatTimer = 0;
+  S.repeatStepCount = 1;
 }
 function stopTouchRepeat() {
   if (S.repeatMoveCode === 'Touch') S.repeatMoveCode = null;
@@ -263,7 +264,7 @@ function editorPan(dxScreen, dyScreen) {
   fwd.normalize();
   const lft = new THREE.Vector3(-fwd.z, 0, fwd.x);
   const k = S.editorCameraZoom * 0.0016;           // screen px → world units, scaled by zoom
-  S.editorCameraTarget.addScaledVector(lft, dxScreen * k);   // drag right → view follows the fingers
+  S.editorCameraTarget.addScaledVector(lft, -dxScreen * k);   // drag right → view follows the fingers
   S.editorCameraTarget.addScaledVector(fwd, dyScreen * k);
 }
 

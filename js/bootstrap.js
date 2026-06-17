@@ -129,7 +129,7 @@ window.addEventListener('keydown', (e) => {
   // Normal gameplay keys
   // Arm held-key auto-repeat for the pressed direction (loop repeats every 300ms).
   const moveMap = { ArrowUp:[0,-1], KeyW:[0,-1], ArrowDown:[0,1], KeyS:[0,1], ArrowLeft:[-1,0], KeyA:[-1,0], ArrowRight:[1,0], KeyD:[1,0] };
-  if (moveMap[e.code]) { S.repeatMoveCode = e.code; S.repeatMoveDir = { x: moveMap[e.code][0], z: moveMap[e.code][1] }; S.moveRepeatTimer = 0; }
+  if (moveMap[e.code]) { S.repeatMoveCode = e.code; S.repeatMoveDir = { x: moveMap[e.code][0], z: moveMap[e.code][1] }; S.moveRepeatTimer = 0; S.repeatStepCount = 1; }
   switch (e.code) {
     case 'ArrowUp': case 'KeyW': e.preventDefault(); handleMove(0, -1); break;
     case 'ArrowDown': case 'KeyS': e.preventDefault(); handleMove(0, 1); break;

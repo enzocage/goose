@@ -258,16 +258,19 @@ export function animate(timestamp) {
       if (S.miniTimer <= 0) checkGrowBack();
     }
 
-    // Held-direction auto-repeat: roll one cell every 300ms while a key is held.
+    // Held-direction auto-repeat: roll one cell every 300ms (or 150ms starting from the 2nd step) while a key is held.
     if (S.repeatMoveCode && S.keysPressed[S.repeatMoveCode] && !S.isLevelComplete) {
       S.moveRepeatTimer += dt * 1000;
-      if (S.moveRepeatTimer >= MOVE_REPEAT_MS) {
-        S.moveRepeatTimer -= MOVE_REPEAT_MS;
+      const currentRepeatMs = (S.repeatStepCount >= 2) ? (MOVE_REPEAT_MS * 0.5) : MOVE_REPEAT_MS;
+      if (S.moveRepeatTimer >= currentRepeatMs) {
+        S.moveRepeatTimer -= currentRepeatMs;
+        S.repeatStepCount = (S.repeatStepCount || 0) + 1;
         handleMove(S.repeatMoveDir.x, S.repeatMoveDir.z);
       }
     } else {
       S.repeatMoveCode = null;
       S.moveRepeatTimer = 0;
+      S.repeatStepCount = 0;
     }
 
     // Platforms update
@@ -329,6 +332,7 @@ export function animate(timestamp) {
       const elapsed = now - S.animStartTime;
       let dur = S.isMini ? ROLL_DUR_MINI : ROLL_DUR_NORMAL;
       if (S.boosterMovesActive > 0) dur *= 0.5;
+      if (S.repeatStepCount >= 2) dur *= 0.5;
       let t = Math.min(elapsed / dur, 1.0);
       t = 1 - Math.pow(1-t, 2.5); // Ease out
 
