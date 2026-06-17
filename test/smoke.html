@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GOOSE — Smoke Tests</title>
+<style>
+  body { font: 14px/1.5 monospace; background:#0a0a14; color:#cde; padding:20px; }
+  #out { white-space:pre-wrap; }
+  .pass { color:#6f6; } .fail { color:#f66; } .head { color:#ff8844; font-size:18px; }
+  /* scene.js appends the WebGL canvas here on import; keep it out of the way. */
+  #canvas-container { position:fixed; width:1px; height:1px; left:-9999px; top:-9999px; overflow:hidden; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<h1 class="head">GOOSE smoke tests</h1>
+<div id="out">Running…</div>
+<div id="canvas-container"></div>
+<script type="module" src="./smoke.js"></script>
+</body>
+</html>
