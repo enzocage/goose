@@ -140,6 +140,7 @@ export const S = {
   rightDragMoved: false,    // suppress erase-on-release after a camera drag
 
   isDrawingPlane: false,
+  planeMode: false,
   planeStartPos: null,
   planeEndPos: null,
   editorPlanePreview: null,

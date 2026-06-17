@@ -89,7 +89,6 @@ let gMode = null;                                  // 'play' | 'edit' for the ac
 let pActive = false, pDir = null, pX = 0, pY = 0;  // play swipe state
 let eActive = false, eMoved = false, eDidLong = false, eTwo = false, ePlaneDraw = false;
 let eX = 0, eY = 0, eLastX = 0, eLastY = 0, ePinch = 0, ePanLast = null, eLongTO = null;
-let planeMode = false;                             // V-style rectangular plane drawing (touch toggle)
 
 function wireCanvasGestures() {
   const canvas = renderer.domElement;
@@ -116,7 +115,7 @@ function onTouchStart(e) {
       eMoved = false; eDidLong = false; eTwo = false; ePlaneDraw = false;
       eX = eLastX = t.clientX; eY = eLastY = t.clientY;
       clearTimeout(eLongTO);
-      if (planeMode && (BLOCK_TOOLS.includes(S.selectedTool) || S.selectedTool === 'eraser')) {
+      if (S.planeMode && (BLOCK_TOOLS.includes(S.selectedTool) || S.selectedTool === 'eraser')) {
         // Plane mode: a drag draws a rectangle (mirrors hold-V + drag on desktop).
         const hit = editorRaycast(synthEvent(t.clientX, t.clientY));
         if (hit) {
@@ -228,7 +227,7 @@ function updatePlanePreview() {
 /* ── O / V edit-mode toggles (touch equivalents of holding O / V) ── */
 function refreshEditModeButtons() {
   document.querySelector('[data-editmode=group]')?.classList.toggle('active', S.currentGroupId !== null);
-  document.querySelector('[data-editmode=plane]')?.classList.toggle('active', planeMode);
+  document.querySelector('[data-editmode=plane]')?.classList.toggle('active', S.planeMode);
 }
 function toggleGroup() {
   audio.init();
@@ -251,9 +250,9 @@ function toggleGroup() {
 }
 function togglePlane() {
   audio.init();
-  planeMode = !planeMode;
-  if (!planeMode && S.isDrawingPlane) commitPlaneDraw();
-  showMessage(planeMode ? 'PLANE MODE — DRAG TO DRAW A RECTANGLE' : 'PLANE MODE OFF', 1.4);
+  S.planeMode = !S.planeMode;
+  if (!S.planeMode && S.isDrawingPlane) commitPlaneDraw();
+  showMessage(S.planeMode ? 'PLANE MODE — DRAG TO DRAW A RECTANGLE' : 'PLANE MODE OFF', 1.4);
   refreshEditModeButtons();
 }
 
@@ -377,7 +376,7 @@ function syncLoop() {
     lastEditing = editing;
     if (!editing) {
       // Leaving the editor drops the transient plane/group modes.
-      planeMode = false;
+      S.planeMode = false;
       if (S.isDrawingPlane) { S.isDrawingPlane = false; if (S.editorPlanePreview) S.editorPlanePreview.visible = false; }
     }
     refreshEditModeButtons();

@@ -169,7 +169,7 @@ initMobileControls({ handleMove, tryPlaceBlock });
 renderer.domElement.addEventListener('mousedown', (e) => {
   if (!S.isEditMode || S.isPlaytesting) return;
   if (e.button === 0) {
-    if (S.keysPressed['KeyV'] && (BLOCK_TOOLS.includes(S.selectedTool) || S.selectedTool === 'eraser')) {
+    if ((S.keysPressed['KeyV'] || S.planeMode) && (BLOCK_TOOLS.includes(S.selectedTool) || S.selectedTool === 'eraser')) {
       const hit = editorRaycast(e);
       if (hit) {
         S.planeStartPos = { x: hit.x, y: S.editY, z: hit.z };
@@ -182,7 +182,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
     // Snapshot once per click / paint-stroke (skip pure linker source-select).
     if (!(S.selectedTool === 'linker' && S.linkerSourceKey === null)) pushUndoSnapshot();
     // Left click edit block
-    if (S.selectedTool !== 'linker' && !S.keysPressed['KeyV']) {
+    if (S.selectedTool !== 'linker' && !S.keysPressed['KeyV'] && !S.planeMode) {
       S.isPainting = true;
     }
     handleEditorClick(e);
