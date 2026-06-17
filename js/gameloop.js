@@ -20,7 +20,8 @@ import {
   checkGrowBack, checkPushedByPlatform, checkRidingPlatform, getBlocksInColumn,
   isLastMoveKeyHeld, onRollComplete, respawnPlayer, updatePressurePlates
 } from './gameplay.js';
-import { handleMove, updatePauseOrbitCamera } from './main.js';
+import { updatePauseOrbitCamera } from './main.js';
+import { handleMove } from './bootstrap.js';
 
 export function updateDynamicTransparency() {
   if (S.isEditMode && !S.isPlaytesting) {

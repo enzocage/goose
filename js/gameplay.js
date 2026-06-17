@@ -17,7 +17,8 @@ import {
   spawnLevelCompleteExplosion, spawnPlutoniumDepositParticles, spawnTeleportParticles
 } from './particles.js';
 import { showMessage, updateComboUI, updateMoveUI, updatePlutoniumUI, updatePrismUI } from './ui.js';
-import { buildLevel3D, loadPreMadeLevel } from './main.js';
+import { buildLevel3D } from './main.js';
+import { loadPreMadeLevel } from './levels.js';
 import { exitPlaytestMode } from './editor.js';
 
 export function getBlocksInColumn(gx, gz) {

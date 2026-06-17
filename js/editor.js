@@ -21,7 +21,9 @@ import {
 import { Level3D, MovingPlatform, serializeLevel, deserializeLevel } from './level.js';
 import { createBlockMesh, createPrismMesh, createEnemyMarker, disposeMaterial, setMeshOpacity } from './meshes.js';
 import { groupMemberCount, refreshGroupingIndicator, setGroupingUI, showMessage } from './ui.js';
-import { buildLevel3D, loadDemoLevel, loadPreMadeLevel, applyXrayOverride, toolButtons } from './main.js';
+import { buildLevel3D, applyXrayOverride } from './main.js';
+import { toolButtons } from './bootstrap.js';
+import { loadDemoLevel, loadPreMadeLevel } from './levels.js';
 
 // Snapshot the current level onto the undo history before a mutating edit.
 export function pushUndoSnapshot() {
