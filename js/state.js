@@ -146,6 +146,7 @@ export const S = {
   editorPlanePreview: null,
 
   linkerSourceKey: null,    // Stored switch/tp for linking
+  lastPlacedKeys: [],
   // Compound objects: while "O" is held, every block placed is tagged with the
   // same group id (block.properties.group).
   currentGroupId: null,     // active group id while O is held, else null

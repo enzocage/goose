@@ -319,7 +319,7 @@ function wireOnscreenControls() {
 
   // Edit-mode toggles: O = group blocks, V = draw a rectangular plane.
   document.querySelectorAll('[data-editmode]').forEach(btn => {
-    btn.addEventListener('pointerdown', (e) => {
+    btn.addEventListener('click', (e) => {
       e.preventDefault();
       if (btn.dataset.editmode === 'group') toggleGroup();
       else if (btn.dataset.editmode === 'plane') togglePlane();

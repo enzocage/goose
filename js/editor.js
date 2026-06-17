@@ -582,6 +582,9 @@ export function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
     removed = true;
   }
   if (kinds.includes('block') && S.activeLevel.blocks.has(key)) {
+    if (S.lastPlacedKeys) {
+      S.lastPlacedKeys = S.lastPlacedKeys.filter(k => k !== key);
+    }
     const hasLinks = S.activeLevel.links.some(l => l.from === key || l.to === key || l.k1 === key || l.k2 === key);
     S.activeLevel.blocks.delete(key);
     if (hasLinks) {
@@ -617,11 +620,22 @@ export function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
   return removed;
 }
 
+function trackPlacedKey(key) {
+  if (!S.lastPlacedKeys) S.lastPlacedKeys = [];
+  const idx = S.lastPlacedKeys.indexOf(key);
+  if (idx >= 0) S.lastPlacedKeys.splice(idx, 1);
+  S.lastPlacedKeys.push(key);
+  if (S.lastPlacedKeys.length > 2) S.lastPlacedKeys.shift();
+}
+
 export function editorPlaceBlock(x, y, z, type) {
   const key = `${x},${y},${z}`;
   const existing = S.activeLevel.blocks.get(key);
   if (existing && existing.type === type) return false;
   if (existing) editorEraseKey(key, ['block']);
+  
+  trackPlacedKey(key);
+  
   const b = { x, y, z, type, properties: {} };
   if (S.currentGroupId !== null) b.properties.group = S.currentGroupId;
   S.activeLevel.blocks.set(key, b);
@@ -990,6 +1004,7 @@ export function enterPlaytestMode() {
   S.isPainting = false;
   S.currentGroupId = null;
   setGroupingUI(false);
+  S.planeMode = false;
   S.playerLives = MAX_LIVES;
   S.savedEditorLevel = serializeLevel(S.activeLevel); // Save design snapshot
 
@@ -1063,9 +1078,107 @@ export function adjustEditHeight(val) {
   updateEditorSlicing();
 }
 
+export function mobileAutoLink() {
+  if (!S.lastPlacedKeys || S.lastPlacedKeys.length < 2) {
+    showMessage('PLACE AT LEAST 2 BLOCKS TO LINK', 1.6);
+    return;
+  }
+  const key1 = S.lastPlacedKeys[0];
+  const key2 = S.lastPlacedKeys[1];
+  
+  const b1 = S.activeLevel.blocks.get(key1);
+  const b2 = S.activeLevel.blocks.get(key2);
+  
+  if (!b1 || !b2) {
+    showMessage('LAST PLACED BLOCKS NO LONGER EXIST', 1.6);
+    return;
+  }
+  
+  // Case 1: Teleporters
+  if (b1.type === 'teleporter' && b2.type === 'teleporter') {
+    const linkIdx = S.activeLevel.links.findIndex(l => 
+      l.type === 'teleporter-link' && 
+      ((l.k1 === key1 && l.k2 === key2) || (l.k1 === key2 && l.k2 === key1))
+    );
+    if (linkIdx >= 0) {
+      S.activeLevel.links.splice(linkIdx, 1);
+      showMessage('PORTALS UNLINKED', 1.5);
+      audio.playLinkCancel();
+    } else {
+      S.activeLevel.links.push({ type: 'teleporter-link', k1: key1, k2: key2 });
+      showMessage('PORTALS LINKED', 1.5);
+      audio.playLinkSuccess();
+    }
+    buildLevel3D(S.activeLevel);
+    drawEditorWires();
+    return;
+  }
+  
+  // Case 2: Switch/pressureplate to bridge/moving platform
+  let srcBlock = null;
+  let tgtBlock = null;
+  let srcKey = null;
+  let tgtKey = null;
+  
+  if (b1.type === 'switch' || b1.type === 'pressureplate') {
+    srcBlock = b1; srcKey = key1;
+    tgtBlock = b2; tgtKey = key2;
+  } else if (b2.type === 'switch' || b2.type === 'pressureplate') {
+    srcBlock = b2; srcKey = key2;
+    tgtBlock = b1; tgtKey = key1;
+  }
+  
+  if (srcBlock && tgtBlock) {
+    const groupId = tgtBlock.properties && tgtBlock.properties.group;
+    let members = [];
+    if (tgtBlock.type === 'bridge' || tgtBlock.type === 'moving') {
+      members = [tgtBlock];
+    }
+    if (groupId !== undefined && groupId !== null) {
+      const groupLinkable = [...S.activeLevel.blocks.values()].filter(b =>
+        b.properties && b.properties.group === groupId &&
+        (b.type === 'bridge' || b.type === 'moving'));
+      if (groupLinkable.length > 0) members = groupLinkable;
+    }
+    
+    if (members.length > 0) {
+      const linkExists = S.activeLevel.links.some(l => 
+        l.type === 'switch-trigger' && l.from === srcKey && members.some(m => `${m.x},${m.y},${m.z}` === l.to)
+      );
+      
+      if (linkExists) {
+        const memberKeys = members.map(m => `${m.x},${m.y},${m.z}`);
+        S.activeLevel.links = S.activeLevel.links.filter(l => 
+          !(l.type === 'switch-trigger' && l.from === srcKey && memberKeys.includes(l.to))
+        );
+        showMessage(members.length > 1 ? `OBJECT TRIGGER UNLINKED (${members.length} ELEMENTS)` : 'TRIGGER UNLINKED', 1.5);
+        audio.playLinkCancel();
+      } else {
+        members.forEach(m => {
+          const tk = `${m.x},${m.y},${m.z}`;
+          S.activeLevel.links.push({ type: 'switch-trigger', from: srcKey, to: tk });
+        });
+        showMessage(members.length > 1 ? `OBJECT TRIGGER LINKED (${members.length} ELEMENTS)` : 'TRIGGER LINKED', 1.5);
+        audio.playLinkSuccess();
+      }
+      buildLevel3D(S.activeLevel);
+      drawEditorWires();
+    } else {
+      showMessage('TARGET MUST BE BRIDGE OR MOVING PLATFORM', 1.6);
+    }
+    return;
+  }
+  
+  showMessage('CANNOT LINK: SELECT SWITCH/PLATE AND PLATFORM/BRIDGE', 1.8);
+}
+
 export function selectToolByName(name) {
   toolButtons.forEach(b => b.classList.toggle('active', b.dataset.tool === name));
   S.selectedTool = name;
   S.linkerSourceKey = null;
   audio.playToolSelect();
+
+  if (name === 'linker' && document.body.classList.contains('touch-device')) {
+    mobileAutoLink();
+  }
 }
