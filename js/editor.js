@@ -620,7 +620,10 @@ export function editorEraseKey(key, kinds = ['block', 'prism', 'enemy']) {
   return removed;
 }
 
-function trackPlacedKey(key) {
+function trackPlacedKey(key, type) {
+  const linkableTypes = ['switch', 'pressureplate', 'teleporter', 'moving', 'bridge'];
+  if (!linkableTypes.includes(type)) return;
+
   if (!S.lastPlacedKeys) S.lastPlacedKeys = [];
   const idx = S.lastPlacedKeys.indexOf(key);
   if (idx >= 0) S.lastPlacedKeys.splice(idx, 1);
@@ -634,7 +637,7 @@ export function editorPlaceBlock(x, y, z, type) {
   if (existing && existing.type === type) return false;
   if (existing) editorEraseKey(key, ['block']);
   
-  trackPlacedKey(key);
+  trackPlacedKey(key, type);
   
   const b = { x, y, z, type, properties: {} };
   if (S.currentGroupId !== null) b.properties.group = S.currentGroupId;
