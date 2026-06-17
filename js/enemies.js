@@ -9,7 +9,7 @@ import { S, audio } from './state.js';
 import { MAX_LIVES, PLAYER_INVINCIBLE_DURATION } from './constants.js';
 import { getPlayerWorldPos } from './scene.js';
 import { showMessage } from './ui.js';
-import { getBlocksInColumn, respawnPlayer, completeLevel } from './main.js';
+import { getBlocksInColumn, respawnPlayer, completeLevel } from './gameplay.js';
 
 function getEnemyMoveTargetY(fromX, fromY, fromZ, toX, toZ) {
   const colBlocks = getBlocksInColumn(toX, toZ);
