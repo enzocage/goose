@@ -18,11 +18,6 @@ import { updateBuildUI } from './bootstrap.js';
 
 // main.js is the game core: clear/build level + a few view/pause helpers. All
 // shared state lives on S (state.js); DOM wiring + startup live in bootstrap.js.
-// Re-exported for the other modules (circular imports; resolved at call time).
-export { buildLevel3D, applyXrayOverride, updatePauseOrbitCamera, togglePause, toggleXray };
-
-
-
 /* ═══════════════════════════════════════════════════════════
    CLEAR / BUILD LEVEL
    ═══════════════════════════════════════════════════════════ */
@@ -64,7 +59,7 @@ function clearLevel() {
   S.pausePointers.clear(); S.pausePinchDist = null;
 }
 
-function buildLevel3D(level3D) {
+export function buildLevel3D(level3D) {
   clearLevel();
   S.isCarryingPlutonium = 0;
   S.plutoniumTimer = level3D.plutoniumTimeLimit ?? 30.0;
@@ -222,11 +217,11 @@ function buildLevel3D(level3D) {
 // whole 3D structure reads through nearer geometry. Runs as the last step of
 // updateEditorSlicing so it survives slicing, edits and rebuilds. Prisms, enemy
 // markers and edge outlines stay opaque to remain readable.
-function applyXrayOverride() {
+export function applyXrayOverride() {
   // X-ray transparency removed at user request
 }
 
-function toggleXray() {
+export function toggleXray() {
   S.xrayMode = !S.xrayMode;
   audio.playXrayToggle(S.xrayMode);
   updateEditorSlicing();        // editor: applies / restores slicing opacity
@@ -235,7 +230,7 @@ function toggleXray() {
 }
 
 // Orbit the camera around the (frozen) player while paused. Player stays centred.
-function updatePauseOrbitCamera() {
+export function updatePauseOrbitCamera() {
   if (!S.playerCube) return;
   const t = S.playerCube.position;
   camera.position.set(
@@ -246,7 +241,7 @@ function updatePauseOrbitCamera() {
   camera.lookAt(t);
 }
 
-function togglePause() {
+export function togglePause() {
   if (S.isEditMode && !S.isPlaytesting) return; // pause only applies to play / playtest
   S.isPaused = !S.isPaused;
   audio.playPauseToggle(S.isPaused);

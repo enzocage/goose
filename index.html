@@ -168,6 +168,7 @@
     <div style="display:flex; align-items:center; gap:12px;">
       <span class="editor-title">LEVEL DESIGNER</span>
       <input type="text" id="level-name-input" value="My Custom Level" class="editor-input">
+      <button id="btn-random-name" class="editor-btn" style="padding:2px 6px; font-size:14px;" title="Generate random level name">🎲</button>
       <select id="world-select" class="editor-select">
         <option value="0">Theme: Foundations</option>
         <option value="1">Theme: Fractures</option>
@@ -215,6 +216,7 @@
       <button id="btn-undo" class="editor-btn" title="Undo last edit (Ctrl+Z or U) — up to 250 steps" disabled>↶ Undo</button>
       <button id="btn-clear-grid" class="editor-btn danger">Clear</button>
       <button id="btn-save-local" class="editor-btn">Save</button>
+      <button id="btn-save-server" class="editor-btn" style="background:#335566;border-color:#6699aa;" title="Save to server (Strato)">Save ➜ Server</button>
       <button id="btn-load-local" class="editor-btn">Load</button>
       <button id="btn-export-level" class="editor-btn">Export</button>
       <button id="btn-import-level" class="editor-btn">Import</button>
@@ -274,6 +276,13 @@
     <div class="instruction-row"><span>Hold O</span><span>Group blocks as object</span></div>
   </div>
 
+</div>
+
+<!-- Level Preview Tooltip (3D thumbnail shown on hover over level names in Load Level panel) -->
+<div id="level-preview-overlay">
+  <canvas id="level-preview-canvas" width="800" height="800"></canvas>
+  <div class="preview-world" id="preview-world-label"></div>
+  <div class="preview-label" id="preview-level-label"></div>
 </div>
 
 <!-- Right Panel: Load Library list (Shared) -->
@@ -338,7 +347,7 @@
     <p class="ai2-intro">Hake die Kriterien an und lege je Kriterium die <b>Menge</b> fest (Zahlfeld). Bei den Abstimmungs-Reglern bedeutet „aus“ = automatisch aus der Größe. Das Ergebnis ist immer lösbar.</p>
 
     <div class="ai3-scroll">
-      <div class="ai3-subtitle">Bausteine &amp; Mengen</div>
+      <div class="ai3-subtitle">Bausteine & Mengen</div>
       <div class="ai3-grid">
         <label class="ai3-option"><input type="checkbox" id="ai3-verticality" checked><span class="ai3-text"><b>Mehrstöckig</b><small>Anzahl Etagen</small></span><input type="number" class="ai3-qty" id="ai3-verticality-n" min="1" max="8" value="3"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-branching" checked><span class="ai3-text"><b>Verzweigtes Layout</b><small>Anzahl Nebenwege</small></span><input type="number" class="ai3-qty" id="ai3-branching-n" min="1" max="30" value="8"></label>
@@ -355,7 +364,7 @@
         <label class="ai3-option"><input type="checkbox" id="ai3-miniprisms" checked><span class="ai3-text"><b>Bonus-Mini-Prismen</b><small>Anzahl Belohnungen</small></span><input type="number" class="ai3-qty" id="ai3-miniprisms-n" min="1" max="20" value="5"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-secretRooms"><span class="ai3-text"><b>Geheim-Kammern</b><small>Anzahl Bonus-Räume</small></span><input type="number" class="ai3-qty" id="ai3-secretRooms-n" min="1" max="8" value="2"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-iceCorridors"><span class="ai3-text"><b>Eis-Korridore</b><small>Anzahl Rutsch-Strecken</small></span><input type="number" class="ai3-qty" id="ai3-iceCorridors-n" min="1" max="8" value="2"></label>
-        <label class="ai3-option"><input type="checkbox" id="ai3-plutonium"><span class="ai3-text"><b>Plutonium &amp; Container</b><small>Anzahl Elemente</small></span><input type="number" class="ai3-qty" id="ai3-plutonium-n" min="1" max="10" value="2"></label>
+        <label class="ai3-option"><input type="checkbox" id="ai3-plutonium"><span class="ai3-text"><b>Plutonium & Container</b><small>Anzahl Elemente</small></span><input type="number" class="ai3-qty" id="ai3-plutonium-n" min="1" max="10" value="2"></label>
         <label class="ai3-option"><input type="checkbox" id="ai3-buildLimit" checked><span class="ai3-text"><b>Block-Limit</b><small>Menge Platzierbare Blöcke</small></span><input type="number" class="ai3-qty" id="ai3-buildLimit-n" min="0" max="99" value="10"></label>
       </div>
 
@@ -460,7 +469,7 @@
           <div><span class="kbd">Q</span> — place block in front 1 level higher (act as a stair/step)</div>
           <div><span class="kbd">R</span> — restart level</div>
           <div><span class="kbd">Middle Click</span> — x-ray view: makes blocks see-through so you can reveal the whole 3D structure hidden behind walls</div>
-          <div><span class="kbd">P</span> — pause &amp; free-orbit camera: drag to rotate 360° around your cube (always centred), wheel or pinch to zoom — works with mouse &amp; touch</div>
+          <div><span class="kbd">P</span> — pause & free-orbit camera: drag to rotate 360° around your cube (always centred), wheel or pinch to zoom — works with mouse & touch</div>
           <div><span class="kbd">H</span> — toggle this help</div>
           <div>♪ icon (bottom-left) — background music player</div>
           <div><b>Load Level</b> / <b>Editor</b> (top) — pick a level or build your own</div>
@@ -472,9 +481,9 @@
         <p>Click <b>Editor</b> (top bar) to build your own level. Pick a block or item from the left <b>Toolbox</b>, then place it on the grid. Set the spawn (<b>Start</b>) and goal (<b>Exit</b>), and use <b>Playtest</b> to try your level — <b>Exit</b> returns to the editor.</p>
         <div class="help-keys">
           <div><span class="kbd">Left&nbsp;Click</span> — place / paint the selected tool · drag to paint a row</div>
-          <div>Hold <span class="kbd">V</span> + <span class="kbd">Drag Left&nbsp;Click</span> — draw a rectangular plane (width &amp; length) of blocks; release V or mouse to commit</div>
+          <div>Hold <span class="kbd">V</span> + <span class="kbd">Drag Left&nbsp;Click</span> — draw a rectangular plane (width & length) of blocks; release V or mouse to commit</div>
           <div><span class="kbd">Right&nbsp;Click</span> — erase (tap) · <b>Right&nbsp;Drag</b> — orbit the camera</div>
-          <div><span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> / <span class="kbd">Q</span><span class="kbd">E</span> — pan &amp; rotate the editor camera · wheel — zoom</div>
+          <div><span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span><span class="kbd">D</span> / <span class="kbd">Q</span><span class="kbd">E</span> — pan & rotate the editor camera · wheel — zoom</div>
           <div><span class="kbd">R</span> / <span class="kbd">F</span> — raise / lower the editing height · <b>Shift</b>+wheel or the right-side ruler also change height</div>
           <div><span class="kbd">1</span>…<span class="kbd">9</span><span class="kbd">0</span> — quick-pick tools · <span class="kbd">X</span> — eraser · <span class="kbd">L</span> — linker</div>
           <div><span class="kbd">Linker</span> — connect a switch/plate ➜ its bridge/platform, or pair two teleporters (source then target, <span class="kbd">Esc</span> to cancel)</div>
@@ -495,7 +504,7 @@
       </section>
 
       <section class="help-sec">
-        <h3>Save, load &amp; share levels</h3>
+        <h3>Save, load & share levels</h3>
         <p>Name your level and pick a <b>Theme</b> in the top bar, then:</p>
         <div class="help-keys">
           <div><b>Save</b> — store the level in your browser (localStorage) under its name.</div>
@@ -513,7 +522,7 @@
 
       <section class="help-sec help-credits">
         <h3>Credits</h3>
-        <p>Coding &amp; game design by <b>Felix Schmidt</b>.</p>
+        <p>Coding & game design by <b>Felix Schmidt</b>.</p>
         <p>Soundtrack: <a href="https://audiomack.com/enzocage/album/carbon" target="_blank" rel="noopener" class="intro-link">Carbon</a> by <b>Enzo Cage</b> — listen on Audiomack.</p>
       </section>
     </div>

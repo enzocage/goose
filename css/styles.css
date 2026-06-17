@@ -1,4 +1,4 @@
-  :root {
+:root {
     --bg: #0a0a0f; --surface: #14141f; --text: #e0e0e0;
     --accent: #ff5500; --accent2: #00ccff; --gold: #ffcc00; --danger: #ff3355;
     --green: #00ff88; --purple: #bb66ff; --ice: #88ddff;
@@ -480,6 +480,57 @@
   }
   #grouping-vignette.active { display: block; animation: groupingPulse 1s ease-in-out infinite; }
 
+  /* ══ LEVEL PREVIEW TOOLTIP ══ */
+  #level-preview-overlay {
+    position: fixed;
+    z-index: 300;
+    pointer-events: none;
+    display: none;
+    background: rgba(10, 10, 15, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    overflow: hidden;
+  }
+  #level-preview-overlay.show {
+    display: block;
+  }
+  #level-preview-overlay canvas {
+    display: block;
+    border-radius: 4px;
+    width: 300px;
+    height: 300px;
+  }
+  #level-preview-overlay .preview-label {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text);
+    opacity: 0.7;
+    background: rgba(0,0,0,0.5);
+    padding: 2px 12px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  #level-preview-overlay .preview-world {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--accent2);
+    opacity: 0.8;
+    background: rgba(0,0,0,0.3);
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+
   /* ═══ RESPONSIVE EDITOR ═══ */
   /* The top/bottom bars wrap on their own (flex-wrap); these queries shrink the
      side panels and controls so the editor stays usable on smaller screens. */
@@ -679,4 +730,3 @@
   .container-btn {
     animation: plutoniumBtnPulse 1.5s ease-in-out infinite;
   }
-

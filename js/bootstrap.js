@@ -8,19 +8,20 @@
 import * as THREE from 'three';
 import { S, audio } from './state.js';
 import { BLOCK_TOOLS, MOVE_REPEAT_MS } from './constants.js';
-import { scene, camera, renderer } from './scene.js';
+import { scene, camera, renderer, geoTile, geoThinTile, geoCube, geoPrism } from './scene.js';
 import { Level3D, MovingPlatform, serializeLevel, deserializeLevel } from './level.js';
 import { createBlockMesh } from './meshes.js';
 import { spawnEntranceParticles } from './particles.js';
 import { groupMemberCount, refreshGroupingIndicator, setGroupingUI, showMessage } from './ui.js';
 import { generateAILabyrinth, generateArchitectLevel, generateArchitectLevel2, generateArchitectLevel3 } from './ai-levels.js';
+import { generateRandomLevelName } from './level-names.js';
 import {
   startRoll, canReverseRoll, reverseCurrentRoll, executeRollBack, advanceCompletedLevel, respawnPlayer
 } from './gameplay.js';
 import {
   pushUndoSnapshot, editorUndo, enterEditMode, exitEditMode, lvlInsertDefaultBlocks, updateEditorSlicing,
   drawEditorWires, editorRaycast, editorEraseKey, commitPlaneDraw, handleEditorClick, handleEditorDragClick,
-  adjustEditHeight, updateLibraryList, selectToolByName
+  adjustEditHeight, updateLibraryList, selectToolByName, enterPlaytestMode
 } from './editor.js';
 import { animate } from './gameloop.js';
 import { loadDemoLevel, loadLevelManifest, loadPreMadeLevel } from './levels.js';
@@ -475,7 +476,68 @@ document.getElementById('btn-play-load').addEventListener('click', () => {
 document.getElementById('btn-editor-toggle').addEventListener('click', () => {
   audio.init();
   audio.playClick();
-  if (S.isEditMode) exitEditMode(); else enterEditMode();
+  if (S.isEditMode) {
+    exitEditMode();
+  } else {
+    enterEditMode();
+    // Auto-generate a random level name when opening the editor if still default
+    const input = document.getElementById('level-name-input');
+    if (input && (input.value === 'My Custom Level' || input.value === '')) {
+      input.value = generateRandomLevelName();
+    }
+    setTimeout(resetEditorViewport, 100);
+  }
+});
+
+// Reset the editor camera to centre on the current level with a good zoom
+function resetEditorViewport() {
+  if (!S.isEditMode || !S.activeLevel) return;
+  // Compute bounding box of all blocks (X, Y, Z)
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  S.activeLevel.blocks.forEach(b => {
+    if (b.x < minX) minX = b.x;
+    if (b.x > maxX) maxX = b.x;
+    if (b.y < minY) minY = b.y;
+    if (b.y > maxY) maxY = b.y;
+    if (b.z < minZ) minZ = b.z;
+    if (b.z > maxZ) maxZ = b.z;
+  });
+  // Also include start/exit positions
+  if (S.activeLevel.start) {
+    if (S.activeLevel.start.x < minX) minX = S.activeLevel.start.x;
+    if (S.activeLevel.start.x > maxX) maxX = S.activeLevel.start.x;
+    if (S.activeLevel.start.y < minY) minY = S.activeLevel.start.y;
+    if (S.activeLevel.start.y > maxY) maxY = S.activeLevel.start.y;
+    if (S.activeLevel.start.z < minZ) minZ = S.activeLevel.start.z;
+    if (S.activeLevel.start.z > maxZ) maxZ = S.activeLevel.start.z;
+  }
+  if (S.activeLevel.exit) {
+    if (S.activeLevel.exit.x < minX) minX = S.activeLevel.exit.x;
+    if (S.activeLevel.exit.x > maxX) maxX = S.activeLevel.exit.x;
+    if (S.activeLevel.exit.y < minY) minY = S.activeLevel.exit.y;
+    if (S.activeLevel.exit.y > maxY) maxY = S.activeLevel.exit.y;
+    if (S.activeLevel.exit.z < minZ) minZ = S.activeLevel.exit.z;
+    if (S.activeLevel.exit.z > maxZ) maxZ = S.activeLevel.exit.z;
+  }
+  if (minX === Infinity) { minX = -2; maxX = 2; minY = 0; maxY = 0; minZ = -2; maxZ = 2; }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+  const span = Math.max(maxX - minX, maxZ - minZ, maxY - minY, 3);
+  S.editorCameraTarget.set(cx, cy, cz);
+  // Keep the framing distance inside the camera far plane (75) and within the
+  // same [8, 45] range the mouse-wheel zoom uses. Without the upper clamp a
+  // large level pushes the camera past the far plane, culling the whole level
+  // to a black screen until the user scrolls (which re-clamps the zoom).
+  S.editorCameraZoom = Math.max(8, Math.min(45, span * 2.8));
+}
+
+// 🎲 Random name generator button
+document.getElementById('btn-random-name').addEventListener('click', () => {
+  audio.init();
+  audio.playClick();
+  document.getElementById('level-name-input').value = generateRandomLevelName();
+  showMessage('RANDOM NAME GENERATED', 1);
 });
 
 // Toolbox items select
@@ -508,7 +570,9 @@ document.getElementById('btn-demo-level').addEventListener('click', () => {
   if (confirm("Load the '★ Element Showcase' demo level? This will overwrite your current design.")) {
     pushUndoSnapshot();
     loadDemoLevel();
+    document.getElementById('level-name-input').value = generateRandomLevelName();
     adjustEditHeight(-S.editY); // reset editing height to 0
+    resetEditorViewport();
   }
 });
 
@@ -534,11 +598,12 @@ document.getElementById('btn-ai-generate').addEventListener('click', () => {
     pushUndoSnapshot();
     const lvl = generateAILabyrinth();
     S.activeLevel = lvl;
-    document.getElementById('level-name-input').value = lvl.name;
+    document.getElementById('level-name-input').value = generateRandomLevelName();
     document.getElementById('world-select').value = lvl.world;
     adjustEditHeight(-S.editY); // Reset edit height to 0
     buildLevel3D(lvl);
     drawEditorWires();
+    resetEditorViewport();
     showMessage('AI LABYRINTH GENERATED');
     audio.playAIGenerate();
   }
@@ -551,11 +616,12 @@ document.getElementById('btn-ai-architect').addEventListener('click', () => {
     pushUndoSnapshot();
     const lvl = generateArchitectLevel(difficulty);
     S.activeLevel = lvl;
-    document.getElementById('level-name-input').value = lvl.name;
+    document.getElementById('level-name-input').value = generateRandomLevelName();
     document.getElementById('world-select').value = lvl.world;
     adjustEditHeight(-S.editY); // Reset edit height to 0
     buildLevel3D(lvl);
     drawEditorWires();
+    resetEditorViewport();
     showMessage(`ARCHITECT LEVEL — DIFFICULTY ${difficulty}`);
     audio.playAIGenerate();
   }
@@ -594,11 +660,12 @@ document.getElementById('btn-ai-pro2-generate').addEventListener('click', () => 
   pushUndoSnapshot();
   const lvl = generateArchitectLevel2(opts);
   S.activeLevel = lvl;
-  document.getElementById('level-name-input').value = lvl.name;
+  document.getElementById('level-name-input').value = generateRandomLevelName();
   document.getElementById('world-select').value = lvl.world;
   adjustEditHeight(-S.editY); // reset edit height to 0
   buildLevel3D(lvl);
   drawEditorWires();
+  resetEditorViewport();
   document.getElementById('ai-pro2-modal').style.display = 'none';
   showMessage(`AI PRO2 — ${lvl.name}`);
   audio.playAIGenerate();
@@ -667,7 +734,7 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
   pushUndoSnapshot();
   const lvl = generateArchitectLevel3(opts);
   S.activeLevel = lvl;
-  document.getElementById('level-name-input').value = lvl.name;
+  document.getElementById('level-name-input').value = generateRandomLevelName();
   document.getElementById('world-select').value = lvl.world;
   if (document.getElementById('level-build-limit-input')) {
     document.getElementById('level-build-limit-input').value = lvl.buildBlocksLimit ?? 10;
@@ -675,6 +742,7 @@ document.getElementById('btn-ai-pro3-generate').addEventListener('click', () => 
   adjustEditHeight(-S.editY); // reset edit height to 0
   buildLevel3D(lvl);
   drawEditorWires();
+  resetEditorViewport();
   document.getElementById('ai-pro3-modal').style.display = 'none';
   showMessage(`AI PRO3 — ${lvl.name}`);
   audio.playAIGenerate();
@@ -687,8 +755,10 @@ document.getElementById('btn-clear-grid').addEventListener('click', () => {
     S.activeLevel.prisms.clear();
     S.activeLevel.links = [];
     lvlInsertDefaultBlocks(S.activeLevel);
+    document.getElementById('level-name-input').value = generateRandomLevelName();
     buildLevel3D(S.activeLevel);
     drawEditorWires();
+    resetEditorViewport();
     audio.playClear();
   }
 });
@@ -708,6 +778,72 @@ document.getElementById('btn-save-local').addEventListener('click', () => {
   store[name] = serializeLevel(S.activeLevel);
   localStorage.setItem('goose_levels', JSON.stringify(store));
   showMessage('LEVEL SAVED SUCCESSFULLY');
+});
+
+document.getElementById('btn-save-server').addEventListener('click', () => {
+  audio.playClick();
+  const name = document.getElementById('level-name-input').value.trim();
+  if (!name) return alert("Please specify level name.");
+
+  // Read or prompt for server configuration
+  let serverUrl = localStorage.getItem('goose_server_url');
+  let serverToken = localStorage.getItem('goose_server_token');
+  if (!serverUrl) {
+    serverUrl = prompt(
+      'Enter the URL of save-level.php on your server.\n' +
+      'Example: https://deinedomain.de/api/save-level.php',
+      serverUrl || ''
+    );
+    if (!serverUrl) return;
+    localStorage.setItem('goose_server_url', serverUrl);
+  }
+  if (!serverToken) {
+    serverToken = prompt(
+      'Enter the secret token for the save endpoint.\n' +
+      '(Set this in api/save-level.php on your server.)',
+      serverToken || ''
+    );
+    if (!serverToken) return;
+    localStorage.setItem('goose_server_token', serverToken);
+  }
+
+  // Serialise level data
+  S.activeLevel.name = name;
+  S.activeLevel.world = parseInt(document.getElementById('world-select').value);
+  if (document.getElementById('level-build-limit-input')) {
+    S.activeLevel.buildBlocksLimit = parseInt(document.getElementById('level-build-limit-input').value, 10) || 10;
+  }
+  const data = serializeLevel(S.activeLevel);
+
+  // POST to server
+  showMessage('SAVING TO SERVER …', 5);
+  fetch(serverUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, data, token: serverToken })
+  })
+  .then(res => {
+    if (!res.ok) return res.json().then(e => { throw new Error(e.error || `HTTP ${res.status}`); });
+    return res.json();
+  })
+  .then(json => {
+    if (json.ok) {
+      showMessage('SAVED TO SERVER ✓', 2);
+      audio.playGroupEnd(); // reuse existing success sound
+    } else {
+      showMessage('SERVER ERROR: ' + (json.error || 'unknown'), 3);
+      audio.playLinkCancel();
+    }
+  })
+  .catch(err => {
+    showMessage('SERVER SAVE FAILED: ' + err.message, 4);
+    audio.playLinkCancel();
+    // Offer to reconfigure
+    if (confirm('Server save failed. Reset server configuration and try again?')) {
+      localStorage.removeItem('goose_server_url');
+      localStorage.removeItem('goose_server_token');
+    }
+  });
 });
 
 document.getElementById('btn-load-local').addEventListener('click', () => {

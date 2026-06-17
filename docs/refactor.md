@@ -15,13 +15,18 @@ Die Datei wurde in **11 fokussierte Module** zerlegt. `main.js` ist jetzt **1.30
 | Kennzahl | Wert |
 |---|---|
 | `main.js` vorher | 5.226 Zeilen |
-| `main.js` nachher | 1.301 Zeilen (**−3.925 / −75 %**) |
-| Neue Module | 9 (+ `scene.js` und `constants.js` erweitert) |
+| `main.js` nachher | **268 Zeilen** (**−4.958 / −95 %**) |
+| Neue Module | 11 (+ `scene.js` und `constants.js` erweitert) |
 | State-Felder auf `S` migriert | 113 |
 | Referenzen auf geteilten State umgeschrieben | ~914 (→ ~1.356 `S.`-Präfixe in `main.js`) |
-| Commits auf dem Branch | 5 |
+| Commits auf dem Branch | 9 |
 | Verhaltensänderungen | keine |
 | Im Browser gefundene & behobene Regressionen | 2 |
+
+> **Stand nach den Folgeschritten** (siehe Abschnitt 11): zusätzlich wurden `levels.js`
+> und `bootstrap.js` ausgegliedert (`bootstrap.js` ist der neue Entry-Point), wodurch
+> `main.js` von 1.301 auf 268 Zeilen schrumpfte. Außerdem: `.gitattributes`, Smoke-Tests
+> und der gepushte PR-Branch.
 
 ---
 

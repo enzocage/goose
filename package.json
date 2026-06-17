@@ -1,0 +1,12 @@
+{
+  "name": "goose",
+  "version": "1.0.0",
+  "description": "Goose – 3D puzzle game with level editor",
+  "private": true,
+  "scripts": {
+    "generate-manifest": "node tools/generate-manifest.mjs",
+    "build": "npm run generate-manifest",
+    "start": "node tools/server.mjs",
+    "dev": "node tools/server.mjs"
+  }
+}
