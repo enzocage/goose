@@ -26,6 +26,7 @@ import {
 import { animate } from './gameloop.js';
 import { loadDemoLevel, loadLevelManifest, loadPreMadeLevel } from './levels.js';
 import { buildLevel3D, togglePause, toggleXray } from './main.js';
+import { initMobileControls } from './mobile.js';
 
 /* ═══════════════════════════════════════════════════════════
    INPUT CONTROLS
@@ -158,15 +159,9 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
-// Mobile Controls
-document.querySelectorAll('.ctrl-btn').forEach(btn => {
-  btn.addEventListener('pointerdown', (e) => {
-    e.preventDefault(); audio.init();
-    const d = btn.dataset.dir;
-    if (d==='up') handleMove(0,-1); else if (d==='down') handleMove(0,1);
-    else if (d==='left') handleMove(-1,0); else if (d==='right') handleMove(1,0);
-  });
-});
+// Mobile / touch controls: invisible canvas gestures, on-screen pads, UI presets.
+// handleMove + tryPlaceBlock are passed in so mobile.js avoids importing bootstrap.
+initMobileControls({ handleMove, tryPlaceBlock });
 
 /* ═══════════════════════════════════════════════════════════
    MOUSE DRAGGING & RAYCAST IN EDITOR
@@ -540,8 +535,8 @@ document.getElementById('btn-random-name').addEventListener('click', () => {
   showMessage('RANDOM NAME GENERATED', 1);
 });
 
-// Toolbox items select
-export const toolButtons = Array.from(document.querySelectorAll('.tool-btn'));
+// Toolbox items select (exclude the touch-only O/V mode buttons — they aren't tools)
+export const toolButtons = Array.from(document.querySelectorAll('.tool-btn:not(.editmode-btn)'));
 toolButtons.forEach((btn, i) => {
   if (i < 10) btn.title += ` [${(i + 1) % 10}]`;
   btn.addEventListener('click', () => selectToolByName(btn.dataset.tool));

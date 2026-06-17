@@ -68,7 +68,9 @@
   .ctrl-btn.right { grid-area:right; }
   .ctrl-btn.down  { grid-area:down; }
 
-  @media (pointer:coarse) { #mobile-controls { display:grid; } #controls-hint { display:none; } }
+  /* The D-pad is now driven by the UI-preset classes (see MOBILE TOUCH UI), not
+     this media query — it only hides the keyboard hint on touch devices. */
+  @media (pointer:coarse) { #controls-hint { display:none; } }
 
   #fall-flash { position:fixed; inset:0; z-index:25; pointer-events:none;
     background:radial-gradient(circle, var(--danger) 0%, transparent 60%);
@@ -558,6 +560,146 @@
     .editor-actions { justify-content: center; }
     .editor-input { width: 100px; }
   }
+
+  /* ═══════════════════════════════════════════════════════════
+     MOBILE TOUCH UI — on-screen controls, editor pad, UI presets
+     Visibility is class-driven (set by mobile.js):
+       body.touch-device          → device has touch; mobile UI is allowed
+       body.ui-standard|gesten|immersiv|none → the active UI preset
+       body.mode-play|mode-edit   → game (or playtest) vs. the level editor
+     Everything mobile-only is hidden by default and revealed by these classes.
+     ═══════════════════════════════════════════════════════════ */
+  #mobile-actions, #editor-touch-pad, #ui-cycle-btn, #ui-cycle-toast { display:none; }
+
+  /* Comfier D-pad on touch devices */
+  body.touch-device .ctrl-btn { width:56px; height:56px; font-size:22px; border-radius:16px; }
+
+  /* On touch there's no H key, and the wide "press H for help" pill crowded the
+     Load/Editor buttons — collapse it to a compact "?" circle that sits cleanly
+     next to the fullscreen / music icons in the bottom-left row. */
+  body.touch-device #help-hint {
+    width:38px; height:38px; padding:0; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-size:0; letter-spacing:0;
+  }
+  body.touch-device #help-hint::before { content:'?'; font-size:19px; font-weight:600; }
+  body.touch-device #help-hint .kbd { display:none; }
+
+  /* Gameplay action buttons — compact 2×2 grid on the left, clear of the
+     music / fullscreen / help / load-editor buttons that sit lower-left. */
+  #mobile-actions {
+    position:fixed; bottom:108px; left:16px; z-index:25;
+    grid-template-columns:repeat(2,1fr); gap:10px;
+  }
+  .act-btn {
+    width:56px; height:56px; border-radius:16px; border:1px solid rgba(255,255,255,0.15);
+    background:rgba(20,20,35,0.7); color:rgba(255,255,255,0.7); cursor:pointer;
+    -webkit-tap-highlight-color:transparent; backdrop-filter:blur(8px); touch-action:none;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+    font-size:20px; line-height:1;
+  }
+  .act-btn .act-lbl { font-size:7px; letter-spacing:0.06em; opacity:0.65; text-transform:uppercase; }
+  .act-btn:active { background:rgba(255,100,0,0.3); border-color:var(--accent); color:#fff; }
+
+  /* Editor camera pad — pan / rotate / zoom / height. Flush to the right edge
+     (the height ruler is hidden on touch, so nothing competes for that space). */
+  #editor-touch-pad {
+    position:fixed; top:50%; right:6px; transform:translateY(-50%); z-index:120;
+    flex-direction:column; align-items:center; gap:10px; pointer-events:auto;
+  }
+  /* Below 561px the toolbox docks full-width across the bottom, leaving no room
+     for the pad — portrait phones edit via the canvas gestures instead. */
+  @media (max-width:560px) { #editor-touch-pad { display:none !important; } }
+  #editor-touch-pad .etp-pan {
+    display:grid; grid-template-areas:'. up .' 'left . right' '. down .'; gap:5px;
+  }
+  #editor-touch-pad .etp-side { display:grid; grid-template-columns:repeat(2,1fr); gap:5px; }
+  .etp-btn {
+    width:42px; height:42px; border-radius:12px; border:1px solid rgba(255,255,255,0.12);
+    background:rgba(15,15,25,0.78); color:rgba(0,204,255,0.85); cursor:pointer;
+    backdrop-filter:blur(8px); -webkit-tap-highlight-color:transparent; touch-action:none;
+    display:flex; align-items:center; justify-content:center; font-size:16px;
+  }
+  .etp-btn.etp-txt { font-size:14px; font-weight:bold; letter-spacing:0.02em; }
+  .etp-btn:active { background:rgba(0,204,255,0.3); color:#fff; border-color:var(--accent2); }
+  #editor-touch-pad [data-ecam=up]    { grid-area:up; }
+  #editor-touch-pad [data-ecam=left]  { grid-area:left; }
+  #editor-touch-pad [data-ecam=right] { grid-area:right; }
+  #editor-touch-pad [data-ecam=down]  { grid-area:down; }
+
+  /* UI-preset cycle button (always reachable on touch) + its toast */
+  #ui-cycle-btn {
+    position:fixed; top:84px; left:50%; transform:translateX(-50%); z-index:260;
+    align-items:center; gap:7px; padding:7px 14px; border-radius:20px; cursor:pointer;
+    background:rgba(15,15,25,0.7); border:1px solid rgba(255,255,255,0.15);
+    color:rgba(224,224,224,0.8); backdrop-filter:blur(10px); touch-action:manipulation;
+    font-size:11px; letter-spacing:0.12em; text-transform:uppercase;
+  }
+  #ui-cycle-btn #ui-cycle-icon { font-size:14px; line-height:1; color:var(--accent2); }
+  #ui-cycle-btn:active { border-color:var(--accent2); color:#fff; }
+  #ui-cycle-toast {
+    position:fixed; top:122px; left:50%; transform:translateX(-50%); z-index:261;
+    padding:6px 14px; border-radius:14px; background:rgba(10,10,15,0.9);
+    border:1px solid var(--accent2); color:#fff; font-size:12px; letter-spacing:0.06em;
+    pointer-events:none; opacity:0; transition:opacity 0.25s; white-space:nowrap;
+    backdrop-filter:blur(8px); max-width:90vw; overflow:hidden; text-overflow:ellipsis;
+  }
+  #ui-cycle-toast.show { opacity:1; }
+
+  /* ── reveal the right controls per preset + mode ──
+     standard → D-pad + action buttons   kompakt → swipe to move, keep actions */
+  body.touch-device #ui-cycle-btn { display:flex; }
+  body.touch-device.ui-standard.mode-play #mobile-controls { display:grid; }
+  body.touch-device.ui-standard.mode-play #mobile-actions  { display:grid; }
+  body.touch-device.ui-kompakt.mode-play  #mobile-actions  { display:grid; }
+  body.touch-device.ui-standard.mode-edit #editor-touch-pad { display:flex; }
+
+  /* Immersive: drop the play HUD (gestures still work); dim the helper buttons. */
+  body.touch-device.ui-immersiv #hud,
+  body.touch-device.ui-none     #hud { display:none !important; }
+  body.touch-device.ui-immersiv #fullscreen-btn,
+  body.touch-device.ui-immersiv #help-hint,
+  body.touch-device.ui-immersiv #music-toggle { opacity:0.3; }
+
+  /* No-UI: hide everything but a small, still-tappable cycle dot. */
+  body.touch-device.ui-none #fullscreen-btn,
+  body.touch-device.ui-none #help-hint,
+  body.touch-device.ui-none #music-ui,
+  body.touch-device.ui-none #controls-hint { display:none !important; }
+  body.touch-device.ui-none #ui-cycle-btn {
+    padding:0; width:20px; height:20px; border-radius:50%; opacity:0.45; gap:0;
+  }
+  body.touch-device.ui-none #ui-cycle-label,
+  body.touch-device.ui-none #ui-cycle-icon { display:none; }
+
+  /* The touch help section only makes sense on touch devices. */
+  body:not(.touch-device) #help-touch-sec { display:none; }
+
+  /* O / V mode buttons live in the toolbox only on touch (desktop uses the keys). */
+  body:not(.touch-device) .editmode-btn { display:none; }
+  .editmode-btn.active {
+    background:rgba(255,170,0,0.18); border-color:#ffaa00;
+    box-shadow:0 0 10px rgba(255,170,0,0.35); color:#ffd699;
+  }
+
+  /* ── Maximise the centre on touch: drop the right height ruler and pull every
+     panel flush to the screen edges (the Y± pad + bottom-bar buttons cover
+     height, so the ruler is redundant on mobile). ── */
+  body.touch-device #editor-height-ruler { display:none !important; }
+
+  body.touch-device #editor-top-bar    { top:6px; left:6px; right:6px; padding:8px 10px; }
+  body.touch-device #editor-bottom-bar { bottom:6px; left:6px; right:6px; padding:8px 10px; }
+  body.touch-device #editor-toolbox    { left:6px; }
+  @media (max-width:560px) {
+    body.touch-device #editor-toolbox  { left:6px; right:6px; }  /* keep the bottom:80 dock gap */
+  }
+
+  body.touch-device #top-bar         { padding:10px 12px; }
+  body.touch-device #mobile-controls { right:12px; bottom:14px; }
+  body.touch-device #mobile-actions  { left:8px; bottom:100px; }
+  body.touch-device #hud-bottom-left { left:8px; }
+  body.touch-device #music-ui        { left:8px; bottom:10px; }
+  body.touch-device #fullscreen-btn  { left:54px; bottom:10px; }
+  body.touch-device #help-hint       { left:100px; bottom:10px; }
 
   /* ═══ SUBTLE BACKGROUND MUSIC PLAYER ═══ */
   #music-ui {

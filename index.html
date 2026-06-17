@@ -160,6 +160,15 @@
         <span class="tool-icon-txt">❌</span>
         Erase
       </button>
+      <!-- Touch-only mode buttons mirroring the O / V keyboard shortcuts -->
+      <button class="tool-btn editmode-btn" data-editmode="group" title="Group blocks into one object (keyboard: hold O). Tap to start grouping, place blocks, tap again to finish.">
+        <span class="tool-icon-txt">🧩</span>
+        Group
+      </button>
+      <button class="tool-btn editmode-btn" data-editmode="plane" title="Draw a rectangular plane of blocks (keyboard: hold V + drag). Tap to toggle, then drag across the grid.">
+        <span class="tool-icon-txt">▦</span>
+        Plane
+      </button>
     </div>
   </div>
   
@@ -274,6 +283,25 @@
     <div class="instruction-row"><span>Linker</span><span>Source ➜ Target (ESC)</span></div>
     <div class="instruction-row"><span>Moving</span><span>Place, then Link dest.</span></div>
     <div class="instruction-row"><span>Hold O</span><span>Group blocks as object</span></div>
+  </div>
+
+  <!-- Editor camera pad (mobile): pan / rotate / zoom / height. Tap canvas = place,
+       drag = orbit, two-finger drag = pan, pinch = zoom, long-press = erase. -->
+  <div id="editor-touch-pad">
+    <div class="etp-pan">
+      <button class="etp-btn" data-ecam="up"    title="Pan up">▲</button>
+      <button class="etp-btn" data-ecam="left"  title="Pan left">◀</button>
+      <button class="etp-btn" data-ecam="right" title="Pan right">▶</button>
+      <button class="etp-btn" data-ecam="down"  title="Pan down">▼</button>
+    </div>
+    <div class="etp-side">
+      <button class="etp-btn" data-ecam="rotL" title="Rotate left">⟲</button>
+      <button class="etp-btn" data-ecam="rotR" title="Rotate right">⟳</button>
+      <button class="etp-btn" data-ecam="zoomIn"  title="Zoom in">＋</button>
+      <button class="etp-btn" data-ecam="zoomOut" title="Zoom out">－</button>
+      <button class="etp-btn etp-txt" data-ecam="heightUp"   title="Height up">Y+</button>
+      <button class="etp-btn etp-txt" data-ecam="heightDown" title="Height down">Y−</button>
+    </div>
   </div>
 
 </div>
@@ -404,6 +432,20 @@
   <button class="ctrl-btn down" data-dir="down">▼</button>
 </div>
 
+<!-- On-screen action buttons (mobile, gameplay): place / step-up / restart / pause -->
+<div id="mobile-actions">
+  <button class="act-btn" data-act="pause"   title="Pause &amp; orbit (P)"><span>⏸</span><span class="act-lbl">Pause</span></button>
+  <button class="act-btn" data-act="restart" title="Restart level (R)"><span>↺</span><span class="act-lbl">Reset</span></button>
+  <button class="act-btn" data-act="placeup" title="Place block one up (Q)"><span>⤴</span><span class="act-lbl">Step</span></button>
+  <button class="act-btn" data-act="place"   title="Place block in front (E)"><span>＋</span><span class="act-lbl">Build</span></button>
+</div>
+
+<!-- UI-preset cycle button (mobile): steps Standard → Gestures → Immersive → No-UI -->
+<button id="ui-cycle-btn" title="Cycle UI layout for different needs" aria-label="Cycle UI layout">
+  <span id="ui-cycle-icon">▦</span><span id="ui-cycle-label">STANDARD</span>
+</button>
+<div id="ui-cycle-toast"></div>
+
 <div id="fall-flash"></div>
 
 <div id="complete-overlay">
@@ -473,6 +515,18 @@
           <div><span class="kbd">H</span> — toggle this help</div>
           <div>♪ icon (bottom-left) — background music player</div>
           <div><b>Load Level</b> / <b>Editor</b> (top) — pick a level or build your own</div>
+        </div>
+      </section>
+
+      <section class="help-sec" id="help-touch-sec">
+        <h3>Touch controls (mobile)</h3>
+        <p>The whole screen is an invisible D-pad: <b>swipe</b> in a direction to roll, or <b>hold</b> a direction to keep rolling. Prefer buttons? The on-screen <b>D-pad</b> (bottom-right) and <b>action buttons</b> (bottom-left: Build, Step, Reset, Pause) do the same.</p>
+        <div class="help-keys">
+          <div><b>Swipe / hold</b> — roll (same auto-repeat as the keyboard)</div>
+          <div><b>Build · Step</b> — place a block in front / one level up (E / Q)</div>
+          <div><b>Reset · Pause</b> — restart (R) · pause &amp; free-orbit (P)</div>
+          <div><b>UI button</b> (top-centre) — cycle Standard → Kompakt → Immersiv → Kein&nbsp;UI to match how much you want on screen</div>
+          <div><b>Editor</b> — tap to place · drag to orbit · two-finger drag to pan · pinch to zoom · long-press to erase · the camera pad handles pan / rotate / zoom / height</div>
         </div>
       </section>
 
